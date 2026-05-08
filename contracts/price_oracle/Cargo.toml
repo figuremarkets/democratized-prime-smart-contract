@@ -1,0 +1,42 @@
+[package]
+name = "democratized-prime-price-oracle"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+
+exclude = [
+    # Those files are rust-optimizer artifacts. You might want to commit them for convenience but they should not be part of the source code publication.
+    "democratized_prime_price_oracle.wasm",
+    "hash.txt",
+]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# for more explicit tests, cargo test --features=backtraces
+backtraces = []
+# use library feature to disable all instantiate/execute/query exports
+library = []
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2.16", features = ["js"] }
+
+[dependencies]
+democratized-prime-lib = { workspace = true }
+cosmwasm-schema = { workspace = true }
+cw-ownable = { workspace = true }
+cosmwasm-std = { workspace = true }
+cw2 = { workspace = true }
+cw-storage-plus = { workspace = true }
+provwasm-std = { workspace = true }
+result-extensions = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+provwasm-mocks = { workspace = true }
