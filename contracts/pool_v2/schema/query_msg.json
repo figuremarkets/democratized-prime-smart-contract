@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "QueryMsg",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "get_state"
+      ],
+      "properties": {
+        "get_state": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Current reserve state (indexes, totals, utilization) plus live APRs (see `ReserveResponseV1`).",
+      "type": "object",
+      "required": [
+        "get_reserve"
+      ],
+      "properties": {
+        "get_reserve": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Borrower position: debt, collateral amounts, collateral value (USD), LTV, and health.",
+      "type": "object",
+      "required": [
+        "get_borrower_position"
+      ],
+      "properties": {
+        "get_borrower_position": {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Collateral required for a given loan amount (for UI).",
+      "type": "object",
+      "required": [
+        "get_collateral_requirements"
+      ],
+      "properties": {
+        "get_collateral_requirements": {
+          "type": "object",
+          "required": [
+            "collateral_assets",
+            "new_loan_amount"
+          ],
+          "properties": {
+            "borrower": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "collateral_assets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "new_loan_amount": {
+              "$ref": "#/definitions/Uint128"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Lender status: whether this address must pass commit_funds when withdrawing (per-address require commit on exit). Underlying lent position comes from the repo_token_cw20 **Balance** query, not this contract.",
+      "type": "object",
+      "required": [
+        "get_lender_status"
+      ],
+      "properties": {
+        "get_lender_status": {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Query the contract's ownership information",
+      "type": "object",
+      "required": [
+        "ownership"
+      ],
+      "properties": {
+        "ownership": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "Uint128": {
+      "description": "A thin wrapper around u128 that is using strings for JSON encoding/decoding, such that the full u128 range can be used for clients that convert JSON numbers to floats, like JavaScript and jq.\n\n# Examples\n\nUse `from` to create instances of this and `u128` to get the value out:\n\n``` # use cosmwasm_std::Uint128; let a = Uint128::from(123u128); assert_eq!(a.u128(), 123);\n\nlet b = Uint128::from(42u64); assert_eq!(b.u128(), 42);\n\nlet c = Uint128::from(70u32); assert_eq!(c.u128(), 70); ```",
+      "type": "string"
+    }
+  }
+}
