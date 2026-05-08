@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  contract-release:
+    name: Contract artifacts release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate JSON schemas
+        run: make schema
+
+      - name: Optimize contracts (WASM)
+        run: make optimize
+
+      - name: Fix permissions
+        run: sudo chown -R "$(id -u):$(id -g)" artifacts/
+
+      # GitHub release assets are flat; each contract uses the same schema basenames
+      # (instantiate_msg.json, etc.), so upload one zip that keeps per-contract paths.
+      - name: Package JSON schemas
+        run: |
+          zip -r democratized_prime_contract_schemas.zip \
+            contracts/pool_v2/schema \
+            contracts/price_oracle/schema \
+            contracts/repo_token_cw20/schema
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            artifacts/democratized_prime_pool_v2.wasm
+            artifacts/democratized_prime_price_oracle.wasm
+            artifacts/repo_token_cw20.wasm
+            artifacts/checksums.txt
+            democratized_prime_contract_schemas.zip
