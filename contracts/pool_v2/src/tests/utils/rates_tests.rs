@@ -2,7 +2,7 @@
 //! and `apply_pro_rata_liquidity_index_haircut` (bad-debt supplier loss).
 
 use crate::model::error::ContractError;
-use crate::model::{RateParamsV1, ReserveStateV1};
+use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
 use crate::utils::rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization, index_growth_factor,
     lender_rate_from_utilization, reserve_totals_and_cash_u128, time_elapsed_seconds,
@@ -18,6 +18,8 @@ fn spreadsheet_rate_params() -> RateParamsV1 {
         max_rate: Decimal256::from_str("0.20").unwrap(),
         kink_utilization: Decimal256::from_str("0.90").unwrap(),
         reserve_factor: Decimal256::from_str("0.005").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     }
 }
@@ -137,6 +139,54 @@ fn lender_rate_at_zero_utilization_is_zero() {
     let borrower_rate = borrower_rate_from_utilization(&params, u).unwrap();
     let lender_rate = lender_rate_from_utilization(&params, u, borrower_rate).unwrap();
     assert!(lender_rate.is_zero(), "lender rate at 0% util should be 0");
+}
+
+#[test]
+fn lender_rate_flat_spread_mode_matches_sheet_identity() {
+    let mut params = spreadsheet_rate_params();
+    params.fee_model = FeeModelV1::FlatBorrowSpread;
+    params.flat_fee_apr = Decimal256::from_str("0.005").unwrap();
+    let u = Decimal256::from_str("0.95").unwrap();
+    let borrower_rate = borrower_rate_from_utilization(&params, u).unwrap();
+    let lender_rate = lender_rate_from_utilization(&params, u, borrower_rate).unwrap();
+    let protocol_rate = params.flat_fee_apr.checked_mul(u).unwrap();
+    let borrower_flow_rate = borrower_rate.checked_mul(u).unwrap();
+    // borrower_rate * U == lender_rate + protocol_rate
+    assert_near(
+        borrower_flow_rate,
+        lender_rate.checked_add(protocol_rate).unwrap(),
+        "flat spread split must tie out",
+    );
+}
+
+#[test]
+fn rate_params_flat_spread_rejects_fee_above_min_rate() {
+    let mut params = spreadsheet_rate_params();
+    params.fee_model = FeeModelV1::FlatBorrowSpread;
+    params.flat_fee_apr = Decimal256::from_str("0.04").unwrap();
+    let err = params.validate().unwrap_err();
+    match err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("flat_fee_apr"));
+            assert!(message.contains("min_rate"));
+        }
+        _ => panic!("expected IllegalArgumentError"),
+    }
+}
+
+#[test]
+fn rate_params_reserve_factor_rejects_non_zero_flat_fee() {
+    let mut params = spreadsheet_rate_params();
+    params.fee_model = FeeModelV1::ReserveFactor;
+    params.flat_fee_apr = Decimal256::from_str("0.001").unwrap();
+    let err = params.validate().unwrap_err();
+    match err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("flat_fee_apr"));
+            assert!(message.contains("reserve_factor"));
+        }
+        _ => panic!("expected IllegalArgumentError"),
+    }
 }
 
 // --- Index growth ---
