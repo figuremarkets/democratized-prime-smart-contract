@@ -5,7 +5,7 @@ use crate::contract::execute;
 use crate::execute::update_rate_params::{ACTION, ASSERT_OWNER_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
-use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
+use crate::model::{CollateralAssetV1, Denom, FeeModelV1, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
@@ -33,6 +33,8 @@ fn default_instantiate_msg() -> InstantiateMsg {
             max_rate: Decimal256::from_str("0.20").unwrap(),
             kink_utilization: Decimal256::from_str("0.90").unwrap(),
             reserve_factor: Decimal256::from_str("0.005").unwrap(),
+            fee_model: Default::default(),
+            flat_fee_apr: Decimal256::zero(),
             seconds_per_year: 31_536_000,
         },
         lender_required_attrs: vec![],
@@ -80,6 +82,8 @@ fn update_rate_params_succeeds() {
         max_rate: Decimal256::from_str("0.22").unwrap(),
         kink_utilization: Decimal256::from_str("0.85").unwrap(),
         reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -125,6 +129,8 @@ fn update_rate_params_accrues_reserve_to_current_block() {
         max_rate: Decimal256::from_str("0.22").unwrap(),
         kink_utilization: Decimal256::from_str("0.85").unwrap(),
         reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -155,6 +161,8 @@ fn update_rate_params_fails_non_owner() {
         max_rate: Decimal256::from_str("0.22").unwrap(),
         kink_utilization: Decimal256::from_str("0.85").unwrap(),
         reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -184,6 +192,8 @@ fn update_rate_params_fails_with_funds() {
         max_rate: Decimal256::from_str("0.22").unwrap(),
         kink_utilization: Decimal256::from_str("0.85").unwrap(),
         reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -215,6 +225,8 @@ fn update_rate_params_fails_invalid_min_gt_target() {
         max_rate: Decimal256::from_str("0.20").unwrap(),
         kink_utilization: Decimal256::from_str("0.90").unwrap(),
         reserve_factor: Decimal256::from_str("0.005").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -247,6 +259,8 @@ fn update_rate_params_fails_reserve_factor_one() {
         max_rate: Decimal256::from_str("0.20").unwrap(),
         kink_utilization: Decimal256::from_str("0.90").unwrap(),
         reserve_factor: Decimal256::one(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -278,6 +292,8 @@ fn update_rate_params_fails_invalid_kink_zero() {
         max_rate: Decimal256::from_str("0.20").unwrap(),
         kink_utilization: Decimal256::zero(),
         reserve_factor: Decimal256::from_str("0.005").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -294,6 +310,68 @@ fn update_rate_params_fails_invalid_kink_zero() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(message.contains("kink_utilization"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn update_rate_params_succeeds_flat_borrow_spread_mode() {
+    let (mut deps, env) = setup_instantiated();
+    let new_params = RateParamsV1 {
+        target_rate: Decimal256::from_str("0.10").unwrap(),
+        min_rate: Decimal256::from_str("0.04").unwrap(),
+        max_rate: Decimal256::from_str("0.22").unwrap(),
+        kink_utilization: Decimal256::from_str("0.85").unwrap(),
+        reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: FeeModelV1::FlatBorrowSpread,
+        flat_fee_apr: Decimal256::from_str("0.005").unwrap(),
+        seconds_per_year: 31_536_000,
+    };
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::UpdateRateParams {
+            rate_params: new_params.clone(),
+        },
+    )
+    .expect("flat spread update should succeed");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.rate_params.fee_model, FeeModelV1::FlatBorrowSpread);
+    assert_eq!(contract.rate_params.flat_fee_apr, new_params.flat_fee_apr);
+}
+
+#[test]
+fn update_rate_params_fails_reserve_factor_with_non_zero_flat_fee() {
+    let (mut deps, env) = setup_instantiated();
+    let invalid_params = RateParamsV1 {
+        target_rate: Decimal256::from_str("0.10").unwrap(),
+        min_rate: Decimal256::from_str("0.04").unwrap(),
+        max_rate: Decimal256::from_str("0.22").unwrap(),
+        kink_utilization: Decimal256::from_str("0.85").unwrap(),
+        reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: FeeModelV1::ReserveFactor,
+        flat_fee_apr: Decimal256::from_str("0.001").unwrap(),
+        seconds_per_year: 31_536_000,
+    };
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::UpdateRateParams {
+            rate_params: invalid_params,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("flat_fee_apr"));
+            assert!(message.contains("reserve_factor"));
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }

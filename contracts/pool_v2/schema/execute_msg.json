@@ -728,6 +728,25 @@
         }
       ]
     },
+    "FeeModelV1": {
+      "description": "Protocol fee routing mode for splitting borrower interest between suppliers and treasury.",
+      "oneOf": [
+        {
+          "description": "Existing behavior: treasury share = borrower_rate * utilization * reserve_factor.",
+          "type": "string",
+          "enum": [
+            "reserve_factor"
+          ]
+        },
+        {
+          "description": "Flat spread behavior: treasury share = flat_fee_apr * utilization.",
+          "type": "string",
+          "enum": [
+            "flat_borrow_spread"
+          ]
+        }
+      ]
+    },
     "OperationalState": {
       "description": "Operational state of the pool. Controls which actions are allowed.",
       "oneOf": [
@@ -766,6 +785,22 @@
         "tr"
       ],
       "properties": {
+        "ff": {
+          "description": "Flat protocol fee APR used when `fee_model = flat_borrow_spread`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Decimal256"
+            }
+          ]
+        },
+        "fm": {
+          "description": "Fee mode: reserve-factor split (default) or flat spread from borrower APR.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/FeeModelV1"
+            }
+          ]
+        },
         "kink": {
           "$ref": "#/definitions/Decimal256"
         },

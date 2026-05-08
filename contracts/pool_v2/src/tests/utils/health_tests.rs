@@ -25,6 +25,8 @@ fn contract_state(margin_rate: &str, liquidation_rate: &str) -> ContractStateV1 
             max_rate: Decimal256::from_str("0.50").unwrap(),
             kink_utilization: Decimal256::from_str("0.80").unwrap(),
             reserve_factor: Decimal256::from_str("0.10").unwrap(),
+            fee_model: Default::default(),
+            flat_fee_apr: Decimal256::zero(),
             seconds_per_year: 31_536_000,
         },
         lender_required_attrs: vec![],

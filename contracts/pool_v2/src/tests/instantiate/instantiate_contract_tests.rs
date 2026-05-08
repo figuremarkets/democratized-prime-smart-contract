@@ -37,6 +37,8 @@ fn default_instantiate_msg() -> InstantiateMsg {
             max_rate: Decimal256::from_str("0.20").unwrap(),
             kink_utilization: Decimal256::from_str("0.90").unwrap(),
             reserve_factor: Decimal256::from_str("0.005").unwrap(),
+            fee_model: Default::default(),
+            flat_fee_apr: Decimal256::zero(),
             seconds_per_year: 31_536_000,
         },
         lender_required_attrs: vec!["lender.kyc".to_string()],

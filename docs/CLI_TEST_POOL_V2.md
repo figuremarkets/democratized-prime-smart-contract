@@ -360,7 +360,7 @@ POOL_MSG=$(cat <<EOF
     }
   },
   "lending_denom": { "n": "$LENDING_DENOM", "p": 6 },
-  "rate_params": { "tr": "0.09", "minr": "0.0325", "maxr": "0.20", "kink": "0.90", "rf": "0.005", "spy": 31536000 },
+  "rate_params": { "tr": "0.09", "minr": "0.0325", "maxr": "0.20", "kink": "0.90", "rf": "0.005", "fm": "reserve_factor", "ff": "0", "spy": 31536000 },
   "lender_required_attrs": ["lender.kyc.pb"],
   "borrower_required_attrs": ["lender.kyc.pb"],
   "price_oracle_address": "$ORACLE_ADDRESS",
@@ -386,6 +386,33 @@ provenanced tx wasm instantiate $CODE_ID_POOL "$POOL_MSG" \
 Set **$POOL** from the result, or: `export POOL=$(provenanced q wasm list-contract-by-code $CODE_ID_POOL --chain-id $CHAIN_ID --testnet -o json | jq -r '.contracts[-1]')`
 
 Optional: **commit_market_id** can be set at instantiate (e.g. `"commit_market_id": 1` for a Provenance exchange market) so that user withdraws with **commit_funds: true** emit MsgCommitFundsRequest. Omit or set to `null` if not using commit-on-exit.
+
+### Rate params fee model (`rate_params.fm`, `rate_params.ff`)
+
+`pool_v2` supports two protocol-fee modes inside `rate_params`:
+
+- `fm: "reserve_factor"` (legacy): lender rate uses `rf`; set `ff` to `"0"`.
+- `fm: "flat_borrow_spread"` (new): protocol takes fixed annual spread `ff` from borrower APR.
+
+Validation rules:
+
+- In `reserve_factor` mode, `ff` must be zero.
+- In `flat_borrow_spread` mode, `ff <= minr` (prevents negative lender rate at low utilization).
+
+Example `rate_params` for flat spread mode:
+
+```json
+{
+  "tr": "0.09",
+  "minr": "0.0325",
+  "maxr": "0.20",
+  "kink": "0.90",
+  "rf": "0.005",
+  "fm": "flat_borrow_spread",
+  "ff": "0.005",
+  "spy": 31536000
+}
+```
 
 **3.1.3 UpdateConfig on repo (minter + pool_address = pool)**
 
@@ -419,7 +446,7 @@ POOL_MSG=$(cat <<EOF
     }
   },
   "lending_denom": { "n": "$LENDING_DENOM", "p": 6 },
-  "rate_params": { "tr": "0.09", "minr": "0.0325", "maxr": "0.20", "kink": "0.90", "rf": "0.005", "spy": 31536000 },
+  "rate_params": { "tr": "0.09", "minr": "0.0325", "maxr": "0.20", "kink": "0.90", "rf": "0.005", "fm": "reserve_factor", "ff": "0", "spy": 31536000 },
   "lender_required_attrs": ["lender.kyc.pb"],
   "borrower_required_attrs": ["lender.kyc.pb"],
   "price_oracle_address": "$ORACLE_ADDRESS",
@@ -595,6 +622,21 @@ provenanced query wasm contract-state smart $POOL '{"get_collateral_requirements
 provenanced tx wasm execute $POOL '{"update_supported_collateral":{"to_update":[{"id":"'$COLLATERAL_DENOM'","h":"0.95"}],"to_remove":[]}}' \
   --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
 provenanced query wasm contract-state smart $POOL '{"get_state":{}}' --chain-id $CHAIN_ID --testnet -o json
+```
+
+**4.10b Admin: UpdateRateParams** (switch fee model) → verify via GetState / GetReserve:
+
+```bash
+# Switch to flat spread mode (50 bps annual spread off borrower APR)
+provenanced tx wasm execute $POOL '{"update_rate_params":{"rate_params":{"tr":"0.09","minr":"0.0325","maxr":"0.20","kink":"0.90","rf":"0.005","fm":"flat_borrow_spread","ff":"0.005","spy":31536000}}}' \
+  --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
+
+# Switch back to reserve-factor mode (ff must be zero)
+provenanced tx wasm execute $POOL '{"update_rate_params":{"rate_params":{"tr":"0.09","minr":"0.0325","maxr":"0.20","kink":"0.90","rf":"0.005","fm":"reserve_factor","ff":"0","spy":31536000}}}' \
+  --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
+
+provenanced query wasm contract-state smart $POOL '{"get_state":{}}' --chain-id $CHAIN_ID --testnet -o json
+provenanced query wasm contract-state smart $POOL '{"get_reserve":{}}' --chain-id $CHAIN_ID --testnet -o json
 ```
 
 **4.11 Admin: WithdrawReserve** → verify reserve state:

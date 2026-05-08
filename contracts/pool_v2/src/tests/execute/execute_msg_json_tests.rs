@@ -316,6 +316,8 @@ fn update_rate_params_json_deserializes() {
                 max_rate: Decimal256::from_str("0.20").unwrap(),
                 kink_utilization: Decimal256::from_str("0.90").unwrap(),
                 reserve_factor: Decimal256::from_str("0.005").unwrap(),
+                fee_model: Default::default(),
+                flat_fee_apr: Decimal256::zero(),
                 seconds_per_year: 31_536_000,
             },
         },
