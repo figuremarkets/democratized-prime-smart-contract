@@ -7,7 +7,7 @@
 //!
 //! **`bad_debt_loss_allocation`:** May only be changed when **`deficit_underlying`** is zero.
 
-use crate::constants::ATTRIBUTE_ACTION_NAME;
+use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
 use cosmwasm_std::{ensure, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128};
@@ -153,5 +153,9 @@ pub fn update_contract_config(
     set_contract_state_v1(deps.storage, &contract)?;
     Response::new()
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
+        .add_attribute(
+            ATTRIBUTE_CONTRACT_STATE_JSON,
+            serde_json::to_string(&contract).unwrap_or_default(),
+        )
         .to_ok()
 }

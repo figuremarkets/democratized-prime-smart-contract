@@ -13,6 +13,7 @@ pub const ATTRIBUTE_BORROWER: &str = "borrower";
 pub const ATTRIBUTE_BORROWER_REQUIRED_ATTRS_JSON: &str = "borrower_required_attrs_json";
 /// Attribute key for collateral; value is JSON object (denom -> amount string). Uses `_json` suffix for JSON payloads.
 pub const ATTRIBUTE_COLLATERAL_JSON: &str = "collateral_json";
+pub const ATTRIBUTE_CONTRACT_STATE_JSON: &str = "contract_state_json";
 pub const ATTRIBUTE_LENDER: &str = "lender";
 pub const ATTRIBUTE_LENDER_REQUIRED_ATTRS_JSON: &str = "lender_required_attrs_json";
 pub const ATTRIBUTE_LIQUIDATOR: &str = "liquidator";
