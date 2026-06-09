@@ -1,7 +1,7 @@
 //! Tests for UpdateContractConfig: success (single and multiple fields), failures for non-owner,
 //! with funds, no fields, and invalid rate combinations.
 
-use crate::constants::ATTRIBUTE_ACTION_NAME;
+use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::contract::execute;
 use crate::execute::update_contract_config::{ACTION, ASSERT_OWNER_ERR};
 use crate::instantiate::instantiate_contract;
@@ -10,7 +10,7 @@ use crate::model::{BadDebtLossAllocation, CollateralAssetV1, Denom, RateParamsV1
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
-use cosmwasm_std::{coin, Addr, Decimal256, Uint128};
+use cosmwasm_std::{coin, Addr, Decimal256, Response, Uint128};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
 use provwasm_mocks::mock_provenance_dependencies;
 use std::str::FromStr;
@@ -310,8 +310,16 @@ fn update_contract_config_emits_action() {
     )
     .expect("update_contract_config should succeed");
 
-    assert_eq!(res.attributes[0].key, ATTRIBUTE_ACTION_NAME);
-    assert_eq!(res.attributes[0].value, ACTION);
+    let result_contract_state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        res,
+        Response::new()
+            .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
+            .add_attribute(
+                ATTRIBUTE_CONTRACT_STATE_JSON,
+                serde_json::to_string(&result_contract_state).unwrap()
+            )
+    )
 }
 
 #[test]
