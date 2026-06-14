@@ -12,7 +12,9 @@
 use crate::contract::{execute, query};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError as ModelContractError;
-use crate::model::{CollateralAssetV1, Denom, RateParamsV1, ReserveStateV1, StateResponseV1};
+use crate::model::{
+    CollateralAssetV1, Denom, FeeModelV1, RateParamsV1, ReserveStateV1, StateResponseV1,
+};
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
 use crate::storage::get_scaled_borrow;
@@ -66,8 +68,18 @@ fn spreadsheet_rate_params() -> RateParamsV1 {
         max_rate: Decimal256::from_str("0.20").unwrap(),
         kink_utilization: Decimal256::from_str("0.90").unwrap(),
         reserve_factor: Decimal256::from_str("0.005").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     }
+}
+
+/// Flat-fee spreadsheet params: same curve but protocol fee is a 50 bps spread off borrower APR.
+fn spreadsheet_rate_params_flat_spread() -> RateParamsV1 {
+    let mut p = spreadsheet_rate_params();
+    p.fee_model = FeeModelV1::FlatBorrowSpread;
+    p.flat_fee_apr = Decimal256::from_str("0.005").unwrap();
+    p
 }
 
 fn default_instantiate_msg() -> InstantiateMsg {
@@ -95,6 +107,12 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
     }
+}
+
+fn flat_spread_instantiate_msg() -> InstantiateMsg {
+    let mut msg = default_instantiate_msg();
+    msg.rate_params = spreadsheet_rate_params_flat_spread();
+    msg
 }
 
 fn price_entry(price: &str) -> AssetPriceResponseV1 {
@@ -221,6 +239,30 @@ fn assert_decimal256_near(
         diff,
         epsilon
     );
+}
+
+/// In flat spread mode we should always have: borrower_rate*U = lender_rate + flat_fee_apr*U.
+fn assert_flat_spread_rate_split_identity(
+    reserve: &ReserveStateV1,
+    params: &RateParamsV1,
+    label: &str,
+) {
+    let utilization = reserve.utilization().expect("utilization");
+    let borrower_rate =
+        crate::utils::borrower_rate_from_utilization(params, utilization).expect("borrower_rate");
+    let lender_rate =
+        crate::utils::lender_rate_from_utilization(params, utilization, borrower_rate)
+            .expect("lender_rate");
+    let borrower_flow = borrower_rate.checked_mul(utilization).expect("borrower*U");
+    let protocol_flow = params
+        .flat_fee_apr
+        .checked_mul(utilization)
+        .expect("flat_fee*U");
+    let rhs = lender_rate
+        .checked_add(protocol_flow)
+        .expect("lender+protocol");
+    let eps = Decimal256::from_str("0.0000000001").unwrap();
+    assert_decimal256_near(borrower_flow, rhs, eps, label);
 }
 
 /// Underlying debt for a borrower in Decimal256 (scaled * borrow_index), no truncation.
@@ -1180,4 +1222,306 @@ fn spreadsheet_events_liabilities_zero() {
         reserve.deficit_underlying,
         "final (12 events)",
     );
+}
+
+#[test]
+fn spreadsheet_events_liabilities_zero_flat_spread_model() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut env = mock_env();
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(
+        COLLATERAL_DENOM.to_string(),
+        price_entry(NBTC_PRICE_LENDING_BASE),
+    );
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        flat_spread_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    let rate_params = spreadsheet_rate_params_flat_spread();
+
+    // Event 1: User A Lend 1000
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(USER_A),
+            &[coin(1000 * UNITS_PER_DISPLAY, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Lend {},
+    )
+    .expect("event 1: lend");
+    let reserve1 = get_state_reserve(&deps, &env);
+    let (liq1, bor1) = reserve_underlying(&reserve1).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq1,
+        bor1,
+        reserve1.accrued_reserve,
+        reserve1.deficit_underlying,
+        "flat spread after event 1",
+    );
+    assert_flat_spread_rate_split_identity(&reserve1, &rate_params, "flat spread event 1 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[0]);
+
+    // Event 2: User C Add collateral
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(USER_C),
+            &[coin(2_000_000_000u128, COLLATERAL_DENOM)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("event 2: add collateral");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[1]);
+
+    // Event 3: User C Borrow 850
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(USER_C), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(850 * UNITS_PER_DISPLAY),
+        },
+    )
+    .expect("event 3: borrow");
+    let reserve3 = get_state_reserve(&deps, &env);
+    let (liq3, bor3) = reserve_underlying(&reserve3).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq3,
+        bor3,
+        reserve3.accrued_reserve,
+        reserve3.deficit_underlying,
+        "flat spread after event 3",
+    );
+    assert_flat_spread_rate_split_identity(&reserve3, &rate_params, "flat spread event 3 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[2]);
+
+    // Event 4: User B Lend 5000
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(USER_B),
+            &[coin(5000 * UNITS_PER_DISPLAY, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Lend {},
+    )
+    .expect("event 4: lend");
+    let reserve4 = get_state_reserve(&deps, &env);
+    let (liq4, bor4) = reserve_underlying(&reserve4).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq4,
+        bor4,
+        reserve4.accrued_reserve,
+        reserve4.deficit_underlying,
+        "flat spread after event 4",
+    );
+    assert_flat_spread_rate_split_identity(&reserve4, &rate_params, "flat spread event 4 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[3]);
+
+    // Event 5: User D Add collateral
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(USER_D),
+            &[coin(10_000_000_000u128, COLLATERAL_DENOM)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("event 5: add collateral");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[4]);
+
+    // Event 6: User D Borrow 4900
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(USER_D), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(4900 * UNITS_PER_DISPLAY),
+        },
+    )
+    .expect("event 6: borrow");
+    let reserve6 = get_state_reserve(&deps, &env);
+    let (liq6, bor6) = reserve_underlying(&reserve6).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq6,
+        bor6,
+        reserve6.accrued_reserve,
+        reserve6.deficit_underlying,
+        "flat spread after event 6",
+    );
+    assert_flat_spread_rate_split_identity(&reserve6, &rate_params, "flat spread event 6 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[5]);
+
+    // Event 7: User C Repay 500
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(USER_C),
+            &[coin(500 * UNITS_PER_DISPLAY, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("event 7: repay");
+    let reserve7 = get_state_reserve(&deps, &env);
+    let (liq7, bor7) = reserve_underlying(&reserve7).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq7,
+        bor7,
+        reserve7.accrued_reserve,
+        reserve7.deficit_underlying,
+        "flat spread after event 7",
+    );
+    assert_flat_spread_rate_split_identity(&reserve7, &rate_params, "flat spread event 7 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[6]);
+
+    // Event 8: User C Remove collateral
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(USER_C), &[]),
+        ExecuteMsg::RemoveCollateral {
+            to_remove: BTreeMap::from([(COLLATERAL_DENOM.to_string(), Uint128::new(7))]),
+        },
+    )
+    .expect("event 8: remove collateral");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[7]);
+
+    // Event 9: User A Lend 100
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(USER_A),
+            &[coin(100 * UNITS_PER_DISPLAY, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Lend {},
+    )
+    .expect("event 9: lend");
+    let reserve9 = get_state_reserve(&deps, &env);
+    let (liq9, bor9) = reserve_underlying(&reserve9).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq9,
+        bor9,
+        reserve9.accrued_reserve,
+        reserve9.deficit_underlying,
+        "flat spread after event 9",
+    );
+    assert_flat_spread_rate_split_identity(&reserve9, &rate_params, "flat spread event 9 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[8]);
+
+    // Event 10: User A Exit 500
+    let scaled_10 =
+        underlying_to_scaled_liquidity(500 * UNITS_PER_DISPLAY, reserve9.liquidity_index).unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
+        ExecuteMsg::Receive(Cw20ReceiveMsg {
+            sender: USER_A.to_string(),
+            amount: Uint128::from(scaled_10),
+            msg: to_json_binary(&Cw20ReceivePayload::Withdraw {
+                amount: Uint128::new(500 * UNITS_PER_DISPLAY),
+                commit_funds: None,
+            })
+            .unwrap(),
+        }),
+    )
+    .expect("event 10: exit");
+    let reserve10 = get_state_reserve(&deps, &env);
+    let (liq10, bor10) = reserve_underlying(&reserve10).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq10,
+        bor10,
+        reserve10.accrued_reserve,
+        reserve10.deficit_underlying,
+        "flat spread after event 10",
+    );
+    assert_flat_spread_rate_split_identity(&reserve10, &rate_params, "flat spread event 10 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[9]);
+
+    // Event 11: User B Transfer 1000
+    let scaled_11 =
+        underlying_to_scaled_liquidity(1000 * UNITS_PER_DISPLAY, reserve10.liquidity_index)
+            .unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
+        ExecuteMsg::Receive(Cw20ReceiveMsg {
+            sender: USER_B.to_string(),
+            amount: Uint128::from(scaled_11),
+            msg: to_json_binary(&Cw20ReceivePayload::Transfer {
+                recipient: USER_E.to_string(),
+                amount: Uint128::new(1000 * UNITS_PER_DISPLAY),
+            })
+            .unwrap(),
+        }),
+    )
+    .expect("event 11: transfer");
+    let reserve11 = get_state_reserve(&deps, &env);
+    let (liq11, bor11) = reserve_underlying(&reserve11).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq11,
+        bor11,
+        reserve11.accrued_reserve,
+        reserve11.deficit_underlying,
+        "flat spread after event 11",
+    );
+    assert_flat_spread_rate_split_identity(&reserve11, &rate_params, "flat spread event 11 split");
+
+    advance_time(&mut env, ELAPSED_SECONDS_BEFORE_EVENT[10]);
+
+    // Event 12: User L Liquidation
+    prices.insert(
+        COLLATERAL_DENOM.to_string(),
+        price_entry(NBTC_PRICE_LIQUIDATION),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+    let repay_12 = 2_991_286_750u128;
+    let seize_12 = 4_400_000_000u128;
+    let mut collateral_to_seize = BTreeMap::new();
+    collateral_to_seize.insert(COLLATERAL_DENOM.to_string(), Uint128::new(seize_12));
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(USER_L), &[coin(repay_12, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: USER_D.to_string(),
+            collateral_to_seize,
+        },
+    )
+    .expect("event 12: liquidation");
+    let reserve12 = get_state_reserve(&deps, &env);
+    let (liq12, bor12) = reserve_underlying(&reserve12).expect("reserve_underlying");
+    assert_assets_minus_liabilities_zero(
+        liq12,
+        bor12,
+        reserve12.accrued_reserve,
+        reserve12.deficit_underlying,
+        "flat spread after event 12",
+    );
+    assert_flat_spread_rate_split_identity(&reserve12, &rate_params, "flat spread event 12 split");
 }

@@ -98,6 +98,11 @@ Symbols are conventionally **all caps** (e.g. HPYLDS, PUSD, METH). For other len
 | (other fields)  | Oracle, collateral, margin/liquidation, etc. **`lender_required_attrs` / `borrower_required_attrs`:** list of attribute names; sender must have **all** of these (empty list = no check). Can be updated later by admin via **SetLenderRequiredAttrs** / **SetBorrowerRequiredAttrs**. |
 
 
+`rate_params` fee-model fields:
+
+- `fm: "reserve_factor"` keeps legacy split via `rf`; in this mode `ff` must be `"0"`.
+- `fm: "flat_borrow_spread"` uses fixed annual spread `ff` off borrower APR; in this mode `ff <= minr`.
+
 **Outcome:** The pool is on-chain and stores the CW20 address. **Do not call Lend yet:** the CW20’s minter is still the admin, so the pool is not allowed to mint.
 
 ---
@@ -267,6 +272,8 @@ From the transaction result, note the **contract address** of the new CW20 → `
     "maxr": "0.20",
     "kink": "0.90",
     "rf": "0.005",
+    "fm": "reserve_factor",
+    "ff": "0",
     "spy": 31536000
   },
   "lender_required_attrs": [],
@@ -337,6 +344,8 @@ After this succeeds, the pool can mint/burn the repo token and the CW20’s Bala
     "maxr": "0.20",
     "kink": "0.90",
     "rf": "0.005",
+    "fm": "reserve_factor",
+    "ff": "0",
     "spy": 31536000
   },
   "lender_required_attrs": [],
