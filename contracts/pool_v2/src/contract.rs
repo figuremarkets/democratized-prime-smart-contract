@@ -1,4 +1,4 @@
-use crate::constants::{CONTRACT_NAME, CONTRACT_VERSION};
+use crate::constants::{ATTRIBUTE_CUSTODIAN, CONTRACT_NAME, CONTRACT_VERSION};
 use crate::execute::{
     add_collateral, borrow, eliminate_deficit, execute_withdraw, lend, liquidate, receive,
     remove_collateral, repay, set_borrower_required_attrs, set_lender_require_commit_on_exit,
@@ -6,7 +6,7 @@ use crate::execute::{
     update_rate_params, update_supported_collateral, withdraw_reserve, UpdateContractConfigParams,
 };
 use crate::instantiate::{instantiate_contract, reply as reply_handler};
-use crate::model::error::{illegal_state, ContractError, QueryError};
+use crate::model::error::{illegal_argument, illegal_state, ContractError, QueryError};
 use crate::model::{ContractStateV1, OperationalState};
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 use crate::query::{
@@ -14,14 +14,17 @@ use crate::query::{
     query_state,
 };
 use crate::storage::contract_state::ITEM;
-use crate::storage::get_contract_state_v1;
+use crate::storage::{get_contract_state_v1, set_contract_state_v1};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    ensure, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
+    ensure, to_json_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
 };
 use cw_ownable::get_ownership;
 use democratized_prime_lib::common::{migrate_contract, update_ownership, LegacyMigration};
+
+pub const ASSERT_CUSTODIAN_ERR: &str =
+    "Custodian account must be set on contract state going forward";
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -46,7 +49,8 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     let contract = get_contract_state_v1(deps.storage)?;
-    // When Paused (e.g. emergency/bug): full freeze. Only owner config allowed; no funds/collateral
+    // When Paused (e.g. emergency/bug): full freeze. Only custodian config changes
+    // are allowed, with the exception of UpdateOwnership (owner only); no funds/collateral
     // in or out. Liquidate is blocked; WithdrawReserve is also blocked (it sends funds).
     let allowed_when_paused = matches!(
         &msg,
@@ -111,6 +115,7 @@ pub fn execute(
             max_borrower_collateral_types,
             commit_market_id,
             bad_debt_loss_allocation,
+            custodian,
         } => update_contract_config(
             deps,
             env,
@@ -125,6 +130,7 @@ pub fn execute(
                 max_borrower_collateral_types,
                 commit_market_id,
                 bad_debt_loss_allocation,
+                custodian,
             },
         ),
         ExecuteMsg::UpdateRateParams { rate_params } => {
@@ -164,8 +170,21 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> Result<Binary, QueryError> 
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
-    migrate_contract::<ContractStateV1>(
+pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
+    // Check the contract's existing custodian account and enforce one being set if not already done:
+    let custodian_account: Option<Addr> = {
+        let contract_state: ContractStateV1 = get_contract_state_v1(deps.storage)?;
+        match (&contract_state.custodian, &msg.custodian) {
+            // no existing custodian set on the contract and no update provided; return an error
+            (None, None) => return Err(illegal_argument(ASSERT_CUSTODIAN_ERR)),
+            // contract custodian will be updated to use the given account address:
+            (_, Some(addr)) => Some(deps.api.addr_validate(addr.trim())?),
+            // contract has an existing custodian, but no update is given; do nothing
+            (Some(_), None) => None,
+        }
+    };
+
+    let mut response: Response = migrate_contract::<ContractStateV1>(
         deps.storage,
         CONTRACT_NAME,
         CONTRACT_VERSION,
@@ -173,5 +192,15 @@ pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, C
             item: &ITEM,
             api: deps.api,
         }),
-    )
+    )?;
+
+    if let Some(custodian_account) = custodian_account {
+        // Get the updated state:
+        let mut contract_state: ContractStateV1 = get_contract_state_v1(deps.storage)?;
+        contract_state.custodian = Some(custodian_account.to_owned());
+        set_contract_state_v1(deps.storage, &contract_state)?;
+        response = response.add_attribute(ATTRIBUTE_CUSTODIAN, custodian_account.to_string());
+    }
+
+    Ok(response)
 }

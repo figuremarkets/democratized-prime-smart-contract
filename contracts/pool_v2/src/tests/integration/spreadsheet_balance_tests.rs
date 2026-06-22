@@ -16,6 +16,7 @@ use crate::model::{CollateralAssetV1, Denom, RateParamsV1, ReserveStateV1, State
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
 use crate::storage::get_scaled_borrow;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::utils::{
     scaled_to_underlying_borrow, scaled_to_underlying_liquidity, underlying_to_scaled_liquidity,
 };
@@ -33,8 +34,6 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
-// --- Constants (tie to spreadsheet: DP V2 Example.xlsx) ---
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 /// Lending denom: "u" prefix => 1 ylds.fcc = 10^6 uylds.fcc (6 decimals).
 const LENDING_DENOM: &str = "uylds.fcc";
 const LENDING_DENOM_PRECISION: u32 = 6;
@@ -94,6 +93,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod custodian;
 pub mod health;
 pub mod math;
 pub mod ownership;
@@ -6,6 +7,7 @@ pub mod rates;
 pub mod response_ext;
 pub mod validation;
 
+pub use custodian::assert_custodian;
 pub use health::{
     calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_value_usd,
     get_borrower_health, get_health_from_ltv, validate_borrower_is_healthy,

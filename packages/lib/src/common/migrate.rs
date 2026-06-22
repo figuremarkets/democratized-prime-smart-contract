@@ -8,7 +8,7 @@ use cw_storage_plus::Item;
 use result_extensions::ResultExtensions;
 use serde::Deserialize;
 
-const ACTION: &str = "migrate";
+pub const ACTION: &str = "migrate";
 
 /// JSON shape used when migrating from optional legacy `admin` in flattened contract state
 /// to [`cw_ownable`] ownership storage.

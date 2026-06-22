@@ -25,6 +25,7 @@ use crate::model::error::{illegal_state, ContractError};
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_reserve_state_v1;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::utils::{
     compute_effective_reserve, reserve_totals_and_cash_u128, scaled_to_underlying_liquidity,
 };
@@ -41,7 +42,6 @@ use serde_json::{from_slice as json_from_slice, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const BORROWER: &str = "tp1borrower";
 const LENDING_DENOM: &str = "uylds.fcc";
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -113,6 +113,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

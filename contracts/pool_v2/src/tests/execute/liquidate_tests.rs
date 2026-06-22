@@ -15,6 +15,7 @@ use crate::storage::{
     get_borrower_collateral, get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow,
 };
 use crate::tests::fixtures::stale_oracle_price;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
@@ -48,7 +49,6 @@ fn collateral_to_seize_min() -> BTreeMap<String, Uint128> {
     m
 }
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const BORROWER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 const OTHER: &str = "tp1tkn2dwfkx7pmjr2rtgqhtrudsv7h8w2tj6eesv";
 /// "u" prefix => 1 ylds.fcc = 10^6 uylds.fcc.
@@ -90,6 +90,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -218,6 +219,31 @@ fn liquidate_non_owner_fails() {
         deps.as_mut(),
         env,
         message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+    ));
+}
+
+#[test]
+fn liquidate_for_custodian_fails() {
+    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+    let min_repay = 374u128;
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(CUSTODIAN),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),

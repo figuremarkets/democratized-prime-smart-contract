@@ -9,6 +9,8 @@ use provwasm_mocks::mock_provenance_dependencies;
 use std::str::FromStr;
 
 pub const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
+pub const CUSTODIAN: &str = "tp16ymwjfyzzatc8q0qldqdurv6kf3d3k8a8dqhgq";
+pub const NEW_CUSTODIAN: &str = "tp1tkn2dwfkx7pmjr2rtgqhtrudsv7h8w2tj6eesv";
 /// Valid Provenance bech32 so addr_validate passes. Used as `RepoTokenInstantiate::Existing` repo token address.
 pub const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 pub const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
@@ -45,6 +47,7 @@ pub fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

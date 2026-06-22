@@ -8,6 +8,7 @@ use crate::instantiate::instantiate_contract;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::assert_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{scaled_to_underlying_borrow, scaled_to_underlying_liquidity};
@@ -24,7 +25,6 @@ use provwasm_mocks::mock_provenance_dependencies;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 const LENDING_DENOM: &str = "uylds.fcc";
@@ -65,6 +65,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -285,6 +286,24 @@ fn withdraw_reserve_fails_non_owner() {
         deps.as_mut(),
         env,
         message_info(&Addr::unchecked("tp1lender"), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+    ));
+}
+
+#[test]
+fn withdraw_reserve_for_custodian_fails() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::WithdrawReserve { recipient: None },
     )
     .unwrap_err();

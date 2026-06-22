@@ -5,22 +5,23 @@
 //! SetOperationalState accepts no funds.
 
 use crate::contract::execute;
-use crate::execute::set_operational_state::ASSERT_OWNER_ERR;
+use crate::execute::set_operational_state::ASSERT_CUSTODIAN_ERR;
 use crate::model::error::{illegal_argument, ContractError};
-use crate::model::OperationalState;
+use crate::model::{CollateralAssetV1, OperationalState, RateParamsV1};
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::ExecuteMsg;
-use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
+use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
 use crate::tests::instantiate_helpers::{
-    setup_instantiated_contract, LENDER, LENDING_DENOM, OWNER,
+    setup_instantiated_contract, CUSTODIAN, LENDER, LENDING_DENOM, OWNER,
 };
 use crate::utils::underlying_to_scaled_liquidity;
 use cosmwasm_std::testing::{message_info, MockApi};
-use cosmwasm_std::{coin, to_json_binary, Addr, Uint128};
+use cosmwasm_std::{coin, to_json_binary, Addr, Decimal256, Uint128};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
 use cw20::Cw20ReceiveMsg;
 use cw_ownable::{get_ownership, Action};
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 fn setup() -> (
     OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
@@ -29,13 +30,87 @@ fn setup() -> (
     setup_instantiated_contract()
 }
 
+fn set_paused(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &Env,
+) {
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Paused,
+        },
+    )
+    .expect("set paused");
+}
+
+#[test]
+fn set_operational_state_owner_fails() {
+    let (mut deps, env) = setup();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn set_operational_state_non_owner_fails() {
+    let (mut deps, env) = setup();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(LENDER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn set_operational_state_fails_when_custodian_unset() {
+    let (mut deps, env) = setup();
+    let mut contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    contract.custodian = None;
+    set_contract_state_v1(deps.as_mut().storage, &contract).unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == "contract custodian not set"
+    ));
+}
+
 #[test]
 fn set_operational_state_fails_with_funds() {
     let (mut deps, env) = setup();
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Frozen,
         },
@@ -60,7 +135,7 @@ fn frozen_blocks_lend() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Frozen,
         },
@@ -95,7 +170,7 @@ fn frozen_blocks_borrow() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Frozen,
         },
@@ -129,7 +204,7 @@ fn paused_blocks_lend() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -164,7 +239,7 @@ fn paused_allows_set_operational_state() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -175,7 +250,7 @@ fn paused_allows_set_operational_state() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Active,
         },
@@ -187,12 +262,109 @@ fn paused_allows_set_operational_state() {
 }
 
 #[test]
+fn paused_allows_custodian_config_messages() {
+    let (mut deps, env) = setup();
+    set_paused(&mut deps, &env);
+
+    // Update contract config:
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: Some(Uint128::new(2)),
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .unwrap();
+
+    // Update rate parameters:
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateRateParams {
+            rate_params: RateParamsV1 {
+                target_rate: Decimal256::from_str("0.10").unwrap(),
+                min_rate: Decimal256::from_str("0.04").unwrap(),
+                max_rate: Decimal256::from_str("0.25").unwrap(),
+                kink_utilization: Decimal256::from_str("0.85").unwrap(),
+                reserve_factor: Decimal256::from_str("0.01").unwrap(),
+                seconds_per_year: 31_536_000,
+            },
+        },
+    )
+    .unwrap();
+
+    // Update supported collateral:
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateSupportedCollateral {
+            to_update: vec![CollateralAssetV1 {
+                asset_id: "asset.two".to_string(),
+                haircut: Some(Decimal256::percent(70)),
+            }],
+            to_remove: vec![],
+        },
+    )
+    .unwrap();
+
+    // Update set lender required attributes:
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetLenderRequiredAttrs {
+            lender_required_attrs: vec!["lender.kyc".to_string()],
+        },
+    )
+    .unwrap();
+
+    // Update set borrower required attributes:
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetBorrowerRequiredAttrs {
+            borrower_required_attrs: vec!["borrower.kyc".to_string()],
+        },
+    )
+    .unwrap();
+
+    // Verify changes:
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.min_lend, Uint128::new(2));
+    assert_eq!(
+        contract.lender_required_attrs,
+        vec!["lender.kyc".to_string()]
+    );
+    assert_eq!(
+        contract.borrower_required_attrs,
+        vec!["borrower.kyc".to_string()]
+    );
+    assert!(contract
+        .supported_collateral_assets
+        .iter()
+        .any(|a| a.asset_id == "asset.two"));
+}
+
+#[test]
 fn paused_blocks_repay() {
     let (mut deps, env) = setup();
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -227,7 +399,7 @@ fn paused_blocks_withdraw() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -263,7 +435,7 @@ fn paused_blocks_withdraw_reserve() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -295,7 +467,7 @@ fn paused_blocks_liquidate() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -334,7 +506,7 @@ fn paused_blocks_add_collateral() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -369,7 +541,7 @@ fn paused_blocks_remove_collateral() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -396,24 +568,6 @@ fn paused_blocks_remove_collateral() {
     }
 }
 
-#[test]
-fn set_operational_state_non_owner_fails() {
-    let (mut deps, env) = setup();
-    let err = execute(
-        deps.as_mut(),
-        env,
-        message_info(&Addr::unchecked(LENDER), &[]),
-        ExecuteMsg::SetOperationalState {
-            state: OperationalState::Frozen,
-        },
-    )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
-    ));
-}
-
 /// Valid Provenance bech32 for receive handler addr_validate (lend_tests LENDER may be shorthand).
 const LENDER_BECH32: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 
@@ -436,7 +590,7 @@ fn frozen_allows_receive_withdraw() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Frozen,
         },
@@ -590,7 +744,7 @@ fn paused_allows_update_ownership() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Paused,
         },
@@ -618,6 +772,69 @@ fn paused_allows_update_ownership() {
 
     let o = get_ownership(deps.as_ref().storage).unwrap();
     assert_eq!(o.owner, Some(Addr::unchecked(NEW_OWNER)));
+}
+
+#[test]
+fn paused_owner_cannot_set_operational_state() {
+    let (mut deps, env) = setup();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Paused,
+        },
+    )
+    .unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Active,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn paused_custodian_cannot_update_ownership() {
+    let (mut deps, env) = setup();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Paused,
+        },
+    )
+    .unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateOwnership(Action::TransferOwnership {
+            new_owner: NEW_OWNER.to_string(),
+            expiry: None,
+        }),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ContractError::Ownership(cw_ownable::OwnershipError::NotOwner)
+        ),
+        "expected Ownership::NotOwner, got {:?}",
+        err
+    );
 }
 
 #[test]

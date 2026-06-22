@@ -15,6 +15,7 @@ use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_reserve_state_v1;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::{
     assert_assets_liabilities_tie_out, assert_assets_liabilities_tie_out_with_tolerance,
 };
@@ -37,7 +38,6 @@ use serde_json::{from_slice as json_from_slice, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 /// Valid Provenance bech32 (so addr_validate passes in Receive handler).
 const LENDER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 const LENDING_DENOM: &str = "uylds.fcc";
@@ -78,6 +78,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -526,7 +527,7 @@ fn withdraw_fails_when_require_commit_on_exit_and_commit_funds_not_true() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -537,6 +538,7 @@ fn withdraw_fails_when_require_commit_on_exit_and_commit_funds_not_true() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");
@@ -583,7 +585,7 @@ fn withdraw_exact_fails_when_require_commit_on_exit_and_commit_funds_not_true() 
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -594,6 +596,7 @@ fn withdraw_exact_fails_when_require_commit_on_exit_and_commit_funds_not_true() 
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");
@@ -636,7 +639,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -647,6 +650,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");
@@ -1296,7 +1300,7 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -1307,6 +1311,7 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");

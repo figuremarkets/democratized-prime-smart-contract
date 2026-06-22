@@ -7,8 +7,8 @@ use crate::model::{ContractStateV1, OperationalState, ReserveStateV1};
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{set_contract_state_v1, set_reserve_state_v1};
 use cosmwasm_std::{
-    ensure, to_json_binary, CosmosMsg, Decimal256, DepsMut, Env, MessageInfo, Response, SubMsg,
-    WasmMsg,
+    ensure, to_json_binary, Addr, CosmosMsg, Decimal256, DepsMut, Env, MessageInfo, Response,
+    SubMsg, WasmMsg,
 };
 use cw2::set_contract_version;
 use cw_ownable::initialize_owner;
@@ -158,7 +158,9 @@ pub fn instantiate_contract(
         ))
     );
 
-    let pool = env.contract.address.clone();
+    let custodian: Addr = deps.api.addr_validate(&msg.custodian.trim())?;
+
+    let pool: Addr = env.contract.address.clone();
 
     let contract_state = ContractStateV1 {
         contract_name: msg.contract_name.clone(),
@@ -179,6 +181,7 @@ pub fn instantiate_contract(
         operational_state: OperationalState::Active,
         commit_market_id: msg.commit_market_id,
         bad_debt_loss_allocation: msg.bad_debt_loss_allocation,
+        custodian: Some(custodian.to_owned()),
     };
     set_contract_state_v1(deps.storage, &contract_state)?;
     initialize_owner(deps.storage, deps.api, Some(info.sender.as_str()))?;

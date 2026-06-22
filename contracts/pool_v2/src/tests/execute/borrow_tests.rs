@@ -10,6 +10,7 @@ use crate::model::{BorrowerCollateralV1, CollateralAssetV1, Denom, RateParamsV1}
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_reserve_state_v1, get_scaled_borrow, set_borrower_collateral};
 use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::scaled_to_underlying_liquidity;
@@ -28,7 +29,6 @@ use provwasm_std::types::provenance::attribute::v1::{
 use std::collections::HashMap;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const BORROWER: &str = "tp1borrower";
 const LENDING_DENOM: &str = "uylds.fcc";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
@@ -69,6 +69,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

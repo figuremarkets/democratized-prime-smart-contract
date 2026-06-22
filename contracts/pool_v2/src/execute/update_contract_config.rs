@@ -9,13 +9,15 @@
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
+use crate::model::BadDebtLossAllocation;
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
+use crate::utils::assert_custodian;
 use cosmwasm_std::{ensure, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128};
-use democratized_prime_lib::common::assert_owner;
 use result_extensions::ResultExtensions;
 
 pub const ACTION: &str = "update_contract_config";
-pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may update contract configuration";
+pub const ASSERT_CUSTODIAN_ERR: &str =
+    "Only the contract custodian may update contract configuration";
 
 /// Optional config fields for UpdateContractConfig. Only provided (non-null) fields are applied.
 #[derive(Clone, Default)]
@@ -28,10 +30,11 @@ pub struct UpdateContractConfigParams {
     pub min_borrow: Option<Uint128>,
     pub max_borrower_collateral_types: Option<u32>,
     pub commit_market_id: Option<u32>,
-    pub bad_debt_loss_allocation: Option<crate::model::BadDebtLossAllocation>,
+    pub bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
+    pub custodian: Option<String>,
 }
 
-/// Update contract config. Contract owner only; no funds. Only provided fields are updated.
+/// Update contract config. Contract custodian only; no funds. Only provided fields are updated.
 /// After apply: margin_rate < liquidation_rate, liquidation_bonus_rate > 1, bonus * margin_rate < 1.
 #[allow(clippy::too_many_arguments)]
 pub fn update_contract_config(
@@ -41,7 +44,9 @@ pub fn update_contract_config(
     params: UpdateContractConfigParams,
 ) -> Result<Response, ContractError> {
     let mut contract = get_contract_state_v1(deps.storage)?;
-    assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
+
+    assert_custodian(&contract, &info.sender, ASSERT_CUSTODIAN_ERR)?;
+
     ensure!(info.funds.is_empty(), invalid_funds("No funds accepted"));
 
     let has_any = params.margin_rate.is_some()
@@ -52,7 +57,8 @@ pub fn update_contract_config(
         || params.min_borrow.is_some()
         || params.max_borrower_collateral_types.is_some()
         || params.commit_market_id.is_some()
-        || params.bad_debt_loss_allocation.is_some();
+        || params.bad_debt_loss_allocation.is_some()
+        || params.custodian.is_some();
     ensure!(
         has_any,
         illegal_argument("At least one config field must be provided")
@@ -117,6 +123,10 @@ pub fn update_contract_config(
             );
         }
         contract.bad_debt_loss_allocation = v;
+    }
+    if let Some(new_custodian) = params.custodian {
+        let new_custodian = deps.api.addr_validate(new_custodian.trim())?;
+        contract.custodian = Some(new_custodian);
     }
 
     ensure!(

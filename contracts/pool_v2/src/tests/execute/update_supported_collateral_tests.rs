@@ -6,19 +6,19 @@ use crate::constants::{
     ATTRIBUTE_SUPPORTED_COLLATERAL_UPDATED_JSON,
 };
 use crate::contract::execute;
-use crate::execute::update_supported_collateral::{ACTION, ASSERT_OWNER_ERR};
+use crate::execute::update_supported_collateral::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_contract_state_v1;
+use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{coin, Addr, Decimal256, Uint128};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
 use provwasm_mocks::mock_provenance_dependencies;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const BORROWER: &str = "tp1borrower";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -64,6 +64,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         ],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -97,7 +98,7 @@ fn update_supported_collateral_succeeds_add_new_asset() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update: to_update.clone(),
             to_remove: to_remove.clone(),
@@ -137,7 +138,7 @@ fn update_supported_collateral_succeeds_update_existing() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -163,7 +164,7 @@ fn update_supported_collateral_succeeds_remove_unused() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update: to_update.clone(),
             to_remove: to_remove.clone(),
@@ -203,7 +204,7 @@ fn update_supported_collateral_succeeds_emits_separate_attributes() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -231,7 +232,7 @@ fn update_supported_collateral_succeeds_emits_separate_attributes() {
 }
 
 #[test]
-fn update_supported_collateral_fails_non_owner() {
+fn update_supported_collateral_fails_for_owner() {
     let (mut deps, env) = setup_instantiated();
     let to_update: Vec<CollateralAssetV1> = vec![];
     let to_remove: Vec<String> = vec![];
@@ -239,7 +240,7 @@ fn update_supported_collateral_fails_non_owner() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked("other"), &[]),
+        message_info(&Addr::unchecked(OWNER), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -249,7 +250,30 @@ fn update_supported_collateral_fails_non_owner() {
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn update_supported_collateral_fails_non_custodian_user() {
+    let (mut deps, env) = setup_instantiated();
+    let to_update: Vec<CollateralAssetV1> = vec![];
+    let to_remove: Vec<String> = vec![];
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(SOME_USER), &[]),
+        ExecuteMsg::UpdateSupportedCollateral {
+            to_update,
+            to_remove,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
     ));
 }
 
@@ -262,7 +286,7 @@ fn update_supported_collateral_fails_with_funds() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(100, "some.denom")]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[coin(100, "some.denom")]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -294,7 +318,7 @@ fn update_supported_collateral_fails_duplicate_asset_id() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -328,7 +352,7 @@ fn update_supported_collateral_fails_when_asset_id_is_lending_denom() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -357,7 +381,7 @@ fn update_supported_collateral_fails_duplicate_when_same_id_in_update_and_remove
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -395,7 +419,7 @@ fn update_supported_collateral_fails_remove_asset_in_use() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -421,7 +445,7 @@ fn update_supported_collateral_remove_nonexistent_is_no_op() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,

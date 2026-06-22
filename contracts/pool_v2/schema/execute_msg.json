@@ -333,6 +333,13 @@
               "format": "uint32",
               "minimum": 0.0
             },
+            "custodian": {
+              "description": "If provider, custodianship will be transferred to the given account.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "liquidation_bonus_rate": {
               "anyOf": [
                 {

@@ -5,6 +5,7 @@
   "required": [
     "borrower_required_attrs",
     "contract_name",
+    "custodian",
     "description",
     "lender_required_attrs",
     "lending_denom",
@@ -47,6 +48,10 @@
       "minimum": 0.0
     },
     "contract_name": {
+      "type": "string"
+    },
+    "custodian": {
+      "description": "The account serving as the custodian of contract operations.",
       "type": "string"
     },
     "description": {

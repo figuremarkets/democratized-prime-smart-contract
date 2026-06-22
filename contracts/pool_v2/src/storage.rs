@@ -15,3 +15,6 @@ pub use lender_require_commit::{
 };
 pub use reserve::{get_reserve_state_v1, set_reserve_state_v1};
 pub use scaled_borrow::{get_scaled_borrow, set_scaled_borrow};
+
+#[cfg(test)]
+pub use contract_state::contract_state_key;

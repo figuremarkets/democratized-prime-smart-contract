@@ -16,3 +16,8 @@ pub fn set_contract_state_v1(
 pub fn get_contract_state_v1(store: &dyn Storage) -> Result<ContractStateV1, ContractError> {
     ITEM.load(store).map_err(ContractError::Std)
 }
+
+#[cfg(test)]
+pub fn contract_state_key() -> String {
+    KEY.to_owned()
+}

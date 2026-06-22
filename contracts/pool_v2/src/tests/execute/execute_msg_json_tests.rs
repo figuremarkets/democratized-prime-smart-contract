@@ -4,6 +4,7 @@
 use crate::model::{CollateralAssetV1, OperationalState, RateParamsV1};
 use crate::msg::execute::{Cw20ReceivePayload, EliminateDeficitFunding};
 use crate::msg::ExecuteMsg;
+use crate::tests::query::common::CUSTODIAN;
 use cosmwasm_std::{to_json_binary, Binary, Decimal256, Uint128};
 use cw20::Cw20ReceiveMsg;
 use cw_ownable::Action;
@@ -243,7 +244,7 @@ fn set_borrower_required_attrs_json_deserializes() {
 #[test]
 fn update_contract_config_json_deserializes() {
     assert_json_deserializes(
-        r#"{"update_contract_config":{"margin_rate":"0.75","liquidation_rate":null,"liquidation_bonus_rate":"1.05","price_oracle_address":"tp1oraclexxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","min_lend":"10","min_borrow":null,"max_borrower_collateral_types":8}}"#,
+        format!(r#"{{"update_contract_config":{{"margin_rate":"0.75","liquidation_rate":null,"liquidation_bonus_rate":"1.05","price_oracle_address":"tp1oraclexxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","min_lend":"10","min_borrow":null,"max_borrower_collateral_types":8, "custodian": "{CUSTODIAN}"}}}}"#).as_str(),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: Some(Decimal256::from_str("0.75").unwrap()),
             liquidation_rate: None,
@@ -254,6 +255,7 @@ fn update_contract_config_json_deserializes() {
             max_borrower_collateral_types: Some(8),
             commit_market_id: None,
             bad_debt_loss_allocation: None,
+            custodian: Some(CUSTODIAN.to_owned()),
         },
     );
 }
@@ -273,6 +275,7 @@ fn update_contract_config_json_deserializes_bad_debt_allocation() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+            custodian: None,
         },
     );
 }
@@ -291,6 +294,26 @@ fn update_contract_config_json_deserializes_commit_market_id() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(42),
             bad_debt_loss_allocation: None,
+            custodian: None,
+        },
+    );
+}
+
+#[test]
+fn update_contract_config_json_deserializes_custodian() {
+    assert_json_deserializes(
+        format!(r#"{{"update_contract_config":{{"custodian":"{CUSTODIAN}"}}}}"#).as_str(),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: None,
+            custodian: Some(CUSTODIAN.to_owned()),
         },
     );
 }
