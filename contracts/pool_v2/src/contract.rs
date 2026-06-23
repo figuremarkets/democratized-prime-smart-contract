@@ -65,7 +65,7 @@ pub fn execute(
     );
     ensure!(
         allowed_when_paused || contract.operational_state != OperationalState::Paused,
-        illegal_state("Contract is paused; only owner config is allowed")
+        illegal_state("Contract is paused; only custodian config updates and ownership transfer is allowed")
     );
     ensure!(
         contract.operational_state != OperationalState::Frozen
