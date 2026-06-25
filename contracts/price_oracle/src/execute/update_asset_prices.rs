@@ -50,7 +50,7 @@ pub fn try_update_asset_prices(
                 (asset_id.clone(), AssetMappingV1::default(asset_id.clone())),
                 |am| (asset_id, am),
             );
-        price_map.insert(display_asset_id, (asset_metadata, price).into_response());
+        price_map.insert(display_asset_id, (asset_metadata, price).into_response()?);
     }
 
     Response::new()

@@ -62,18 +62,19 @@ impl AssetMappingV1 {
 }
 
 pub trait IntoAssetPriceResponse {
-    fn into_response(self) -> AssetPriceResponseV1;
+    fn into_response(self) -> Result<AssetPriceResponseV1, ContractError>;
 }
 
 impl IntoAssetPriceResponse for (AssetMappingV1, PriceV1) {
-    fn into_response(self) -> AssetPriceResponseV1 {
+    fn into_response(self) -> Result<AssetPriceResponseV1, ContractError> {
         let (asset_mapping, price) = self;
-        AssetPriceResponseV1 {
-            price_usd: scale_price(price.price_usd, asset_mapping.precision).unwrap(),
+        let response = AssetPriceResponseV1 {
+            price_usd: scale_price(price.price_usd, asset_mapping.precision)?,
             as_of_epoch_second: price.as_of_epoch_second,
             expiration_epoch_seconds: price.as_of_epoch_second
                 + (asset_mapping.staleness_threshold_seconds as u64),
-        }
+        };
+        Ok(response)
     }
 }
 
