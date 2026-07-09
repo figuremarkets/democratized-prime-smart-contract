@@ -64,7 +64,7 @@ fn set_operational_state_owner_fails() {
 }
 
 #[test]
-fn set_operational_state_non_owner_fails() {
+fn set_operational_state_non_custodian_fails() {
     let (mut deps, env) = setup();
     let err = execute(
         deps.as_mut(),

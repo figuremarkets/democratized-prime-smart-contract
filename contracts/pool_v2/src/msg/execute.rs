@@ -116,7 +116,7 @@ pub enum ExecuteMsg {
         /// Changing the value is rejected while **`deficit_underlying`** on the reserve is positive.
         #[serde(default)]
         bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
-        /// If provider, custodianship will be transferred to the given account.
+        /// If provided, custodianship will be transferred to the given account.
         custodian: Option<String>,
     },
 
