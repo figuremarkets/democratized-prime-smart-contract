@@ -4,8 +4,11 @@ pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Re-export common constants:
 pub use democratized_prime_lib::common::constants::ATTRIBUTE_ACTION_NAME;
 
-/// Attribute key for the full asset price map; value is JSON (same shape as GetPrices query).
-pub const ATTRIBUTE_PRICE_MAP_JSON: &str = "price_map_json";
+/// Attribute key for previous prices of updated assets; value is JSON (same shape as GetPrices query).
+pub const ATTRIBUTE_PREVIOUS_PRICES_JSON: &str = "previous_prices_json";
+
+/// Attribute key for updated prices of changed assets; value is JSON (same shape as GetPrices query).
+pub const ATTRIBUTE_UPDATED_PRICES_JSON: &str = "updated_prices_json";
 
 pub const TEN: &str = "10";
 

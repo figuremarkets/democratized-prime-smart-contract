@@ -1,6 +1,10 @@
-use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_PRICE_MAP_JSON};
-use crate::model::{error::ContractError, AssetMappingV1, IntoAssetPriceResponse, PriceUpdateV1};
-use crate::storage::{get_sorted_prices_v1, save_usd_price_v1, try_get_asset_mapping_v1};
+use crate::constants::{
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_PREVIOUS_PRICES_JSON, ATTRIBUTE_UPDATED_PRICES_JSON,
+};
+use crate::model::{
+    error::ContractError, IntoAssetPriceResponse, PriceUpdateV1, PriceV1,
+};
+use crate::storage::{get_or_default_asset_mapping_v1, save_usd_price_v1, try_get_usd_price_v1};
 use crate::utils::validate_name_uniqueness;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
 use democratized_prime_lib::common::assert_owner;
@@ -32,32 +36,42 @@ pub fn try_update_asset_prices(
 
     validate_name_uniqueness(&asset_ids)?;
 
-    for price_update in price_updates {
-        price_update.validate(env.block.time)?;
+    let mut previous_prices: BTreeMap<String, AssetPriceResponseV1> = BTreeMap::new();
+    let mut updated_prices: BTreeMap<String, AssetPriceResponseV1> = BTreeMap::new();
 
+    for price_update in price_updates {
+        let (display_asset_id, asset_metadata) =
+            get_or_default_asset_mapping_v1(deps.storage, &price_update.asset)?;
+
+        if let Some(previous_price) = try_get_usd_price_v1(deps.storage, &price_update.asset)? {
+            previous_prices.insert(
+                display_asset_id.clone(),
+                (asset_metadata.clone(), previous_price).into_response()?,
+            );
+        }
+
+        price_update.validate(env.block.time)?;
+        let new_price: PriceV1 = (&env, &price_update).into();
         save_usd_price_v1(
             deps.storage,
             price_update.asset.clone(),
-            &(&env, &price_update).into(),
+            &new_price,
         )?;
-    }
-
-    let prices = get_sorted_prices_v1(deps.storage, None, u32::MAX)?;
-    let mut price_map: BTreeMap<String, AssetPriceResponseV1> = BTreeMap::new();
-    for (asset_id, price) in prices {
-        let (display_asset_id, asset_metadata): (String, AssetMappingV1) =
-            try_get_asset_mapping_v1(deps.storage, &asset_id)?.map_or(
-                (asset_id.clone(), AssetMappingV1::default(asset_id.clone())),
-                |am| (asset_id, am),
-            );
-        price_map.insert(display_asset_id, (asset_metadata, price).into_response()?);
+        updated_prices.insert(
+            display_asset_id,
+            (asset_metadata, new_price).into_response()?,
+        );
     }
 
     Response::new()
         .add_attribute(ATTRIBUTE_ACTION_NAME, ATTRIBUTE_ACTION_VALUE)
         .add_attribute(
-            ATTRIBUTE_PRICE_MAP_JSON,
-            serde_json::to_string(&price_map).unwrap_or_default(),
+            ATTRIBUTE_PREVIOUS_PRICES_JSON,
+            serde_json::to_string(&previous_prices).unwrap_or_default(),
+        )
+        .add_attribute(
+            ATTRIBUTE_UPDATED_PRICES_JSON,
+            serde_json::to_string(&updated_prices).unwrap_or_default(),
         )
         .to_ok()
 }
