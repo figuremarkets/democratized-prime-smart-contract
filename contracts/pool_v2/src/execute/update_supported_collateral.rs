@@ -3,17 +3,18 @@ use crate::constants::{
     ATTRIBUTE_SUPPORTED_COLLATERAL_UPDATED_JSON,
 };
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
-use crate::model::CollateralAssetV1;
+use crate::model::{CollateralAssetV1, ContractStateV1};
 use crate::storage::{get_contract_state_v1, is_collateral_asset_in_use, set_contract_state_v1};
+use crate::utils::assert_custodian;
 use cosmwasm_std::{ensure, DepsMut, Env, MessageInfo, Response};
-use democratized_prime_lib::common::assert_owner;
 use result_extensions::ResultExtensions;
 use std::collections::HashSet;
 
 pub const ACTION: &str = "update_supported_collateral";
-pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may update supported collateral";
+pub const ASSERT_CUSTODIAN_ERR: &str =
+    "Only the contract custodian may update supported collateral";
 
-/// Update supported collateral assets. Contract owner only; no funds. Cannot remove an asset that any
+/// Update supported collateral assets. Contract custodian only; no funds. Cannot remove an asset that any
 /// borrower currently holds.
 pub fn update_supported_collateral(
     deps: DepsMut,
@@ -22,8 +23,8 @@ pub fn update_supported_collateral(
     to_update: &[CollateralAssetV1],
     to_remove: &[String],
 ) -> Result<Response, ContractError> {
-    let mut contract = get_contract_state_v1(deps.storage)?;
-    assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
+    let mut contract: ContractStateV1 = get_contract_state_v1(deps.storage)?;
+    assert_custodian(&contract, &info.sender, ASSERT_CUSTODIAN_ERR)?;
     ensure!(info.funds.is_empty(), invalid_funds("No funds accepted"));
 
     let mut all_asset_ids: Vec<String> = to_update.iter().map(|a| a.asset_id.clone()).collect();

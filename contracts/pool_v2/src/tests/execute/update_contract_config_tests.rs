@@ -3,19 +3,22 @@
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::contract::execute;
-use crate::execute::update_contract_config::{ACTION, ASSERT_OWNER_ERR};
+use crate::execute::set_operational_state::ASSERT_CUSTODIAN_ERR as SET_OP_ASSERT_CUSTODIAN_ERR;
+use crate::execute::update_contract_config::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
-use crate::model::{BadDebtLossAllocation, CollateralAssetV1, Denom, RateParamsV1};
+use crate::model::{
+    BadDebtLossAllocation, CollateralAssetV1, Denom, OperationalState, RateParamsV1,
+};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1};
+use crate::tests::query::common::{CUSTODIAN, NEW_CUSTODIAN, OWNER, SOME_USER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{coin, Addr, Decimal256, Response, Uint128};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
 use provwasm_mocks::mock_provenance_dependencies;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 /// Another valid Provenance bech32 address (from withdraw_reserve_tests).
@@ -52,6 +55,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -79,7 +83,7 @@ fn update_contract_config_succeeds_single_field() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -90,6 +94,7 @@ fn update_contract_config_succeeds_single_field() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("update_contract_config should succeed");
@@ -114,7 +119,7 @@ fn update_contract_config_sets_bad_debt_loss_allocation() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -125,6 +130,7 @@ fn update_contract_config_sets_bad_debt_loss_allocation() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+            custodian: None,
         },
     )
     .expect("update bad_debt_loss_allocation");
@@ -146,7 +152,7 @@ fn update_contract_config_rejects_bad_debt_allocation_change_when_deficit_positi
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -157,6 +163,7 @@ fn update_contract_config_rejects_bad_debt_allocation_change_when_deficit_positi
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -183,7 +190,7 @@ fn update_contract_config_allows_other_fields_when_deficit_positive() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: Some(Decimal256::from_str("0.79").unwrap()),
             liquidation_rate: None,
@@ -194,6 +201,7 @@ fn update_contract_config_allows_other_fields_when_deficit_positive() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: None,
+            custodian: None,
         },
     )
     .expect("margin_rate update with deficit");
@@ -212,7 +220,7 @@ fn update_contract_config_allows_redundant_bad_debt_allocation_when_deficit_posi
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -223,6 +231,7 @@ fn update_contract_config_allows_redundant_bad_debt_allocation_when_deficit_posi
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::DeferredToDeficit),
+            custodian: None,
         },
     )
     .expect("no-op bad_debt_loss_allocation with deficit");
@@ -237,7 +246,7 @@ fn update_contract_config_succeeds_multiple_fields() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: Some(Decimal256::from_str("0.75").unwrap()),
             liquidation_rate: Some(Decimal256::from_str("0.92").unwrap()),
@@ -248,6 +257,7 @@ fn update_contract_config_succeeds_multiple_fields() {
             max_borrower_collateral_types: Some(3),
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("update_contract_config should succeed");
@@ -269,7 +279,7 @@ fn update_contract_config_succeeds_price_oracle() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -280,6 +290,7 @@ fn update_contract_config_succeeds_price_oracle() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("update_contract_config should succeed");
@@ -295,7 +306,7 @@ fn update_contract_config_emits_action() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -306,6 +317,7 @@ fn update_contract_config_emits_action() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("update_contract_config should succeed");
@@ -323,13 +335,13 @@ fn update_contract_config_emits_action() {
 }
 
 #[test]
-fn update_contract_config_fails_non_owner() {
+fn update_contract_config_fails_for_owner() {
     let (mut deps, env) = setup_instantiated();
 
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked("other"), &[]),
+        message_info(&Addr::unchecked(OWNER), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -340,13 +352,43 @@ fn update_contract_config_fails_non_owner() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn update_contract_config_fails_for_non_custodian_user() {
+    let (mut deps, env) = setup_instantiated();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(SOME_USER), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: Some(Uint128::new(10)),
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
     ));
 }
 
@@ -357,7 +399,7 @@ fn update_contract_config_fails_with_funds() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, "uylds.fcc")]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[coin(1, "uylds.fcc")]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -368,6 +410,7 @@ fn update_contract_config_fails_with_funds() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -385,7 +428,7 @@ fn update_contract_config_fails_no_fields() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -396,6 +439,7 @@ fn update_contract_config_fails_no_fields() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -415,7 +459,7 @@ fn update_contract_config_fails_margin_not_less_than_liquidation() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: Some(Decimal256::from_str("0.90").unwrap()),
             liquidation_rate: Some(Decimal256::from_str("0.90").unwrap()),
@@ -426,6 +470,7 @@ fn update_contract_config_fails_margin_not_less_than_liquidation() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -444,7 +489,7 @@ fn update_contract_config_fails_when_liquidation_rate_is_greater_than_one() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: Some(Decimal256::from_str("1.000001").unwrap()),
@@ -455,6 +500,7 @@ fn update_contract_config_fails_when_liquidation_rate_is_greater_than_one() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -479,7 +525,7 @@ fn update_contract_config_fails_liquidation_rate_decrease() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: Some(Decimal256::from_str("0.88").unwrap()),
@@ -490,6 +536,7 @@ fn update_contract_config_fails_liquidation_rate_decrease() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -513,7 +560,7 @@ fn update_contract_config_succeeds_liquidation_rate_increase() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: Some(Decimal256::from_str("0.95").unwrap()),
@@ -524,6 +571,7 @@ fn update_contract_config_succeeds_liquidation_rate_increase() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("increasing liquidation_rate should succeed");
@@ -547,7 +595,7 @@ fn update_contract_config_succeeds_commit_market_id_set() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -558,6 +606,7 @@ fn update_contract_config_succeeds_commit_market_id_set() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id should succeed");
@@ -575,7 +624,7 @@ fn update_contract_config_preserves_commit_market_id_when_not_patched() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -586,6 +635,7 @@ fn update_contract_config_preserves_commit_market_id_when_not_patched() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id should succeed");
@@ -593,7 +643,7 @@ fn update_contract_config_preserves_commit_market_id_when_not_patched() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -604,6 +654,7 @@ fn update_contract_config_preserves_commit_market_id_when_not_patched() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("patch min_lend only should succeed");
@@ -620,7 +671,7 @@ fn update_contract_config_fails_bonus_not_gt_one() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -631,6 +682,7 @@ fn update_contract_config_fails_bonus_not_gt_one() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -650,7 +702,7 @@ fn update_contract_config_fails_min_lend_zero() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -661,6 +713,7 @@ fn update_contract_config_fails_min_lend_zero() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -680,7 +733,7 @@ fn update_contract_config_fails_max_borrower_collateral_types_zero() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -691,6 +744,7 @@ fn update_contract_config_fails_max_borrower_collateral_types_zero() {
             max_borrower_collateral_types: Some(0),
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -710,7 +764,7 @@ fn update_contract_config_fails_empty_price_oracle() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -721,6 +775,7 @@ fn update_contract_config_fails_empty_price_oracle() {
             max_borrower_collateral_types: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .unwrap_err();
@@ -731,4 +786,299 @@ fn update_contract_config_fails_empty_price_oracle() {
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
+}
+
+#[test]
+fn update_contract_config_transfers_custodian() {
+    let (mut deps, env) = setup_instantiated();
+
+    // Onyl the existing custodian can transfer custodianship to a different account:
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .unwrap();
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.custodian, Some(Addr::unchecked(NEW_CUSTODIAN)));
+}
+
+#[test]
+fn update_contract_config_old_custodian_denied_after_transfer() {
+    let (mut deps, env) = setup_instantiated();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: Some(Uint128::new(10)),
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn update_contract_config_new_custodian_succeeds_after_transfer() {
+    let (mut deps, env) = setup_instantiated();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .unwrap();
+
+    // Try an update after the transfer with the new custodian:
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(NEW_CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: Some(Uint128::new(10)),
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .unwrap();
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.min_lend, Uint128::new(10));
+}
+
+#[test]
+fn update_contract_config_owner_cannot_transfer_custodian() {
+    let (mut deps, env) = setup_instantiated();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.custodian, Some(Addr::unchecked(CUSTODIAN)));
+}
+
+#[test]
+fn update_contract_config_custodian_only_field_succeeds() {
+    let (mut deps, env) = setup_instantiated();
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(res.attributes[0].key, ATTRIBUTE_ACTION_NAME);
+    assert_eq!(res.attributes[0].value, ACTION);
+    assert!(
+        res.attributes
+            .iter()
+            .any(|a| a.key == ATTRIBUTE_CONTRACT_STATE_JSON),
+        "expected contract state JSON attribute"
+    );
+}
+
+#[test]
+fn update_contract_config_rejects_invalid_custodian() {
+    let (mut deps, env) = setup_instantiated();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some("not_a_valid_address".to_owned()),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.custodian, Some(Addr::unchecked(CUSTODIAN)));
+}
+
+#[test]
+fn transferred_custodian_gates_set_operational_state() {
+    let (mut deps, env) = setup_instantiated();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .expect("custodian transfer");
+
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == SET_OP_ASSERT_CUSTODIAN_ERR
+    ));
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(NEW_CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .unwrap();
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Frozen);
+}
+
+#[test]
+fn update_contract_config_trims_custodian_whitespace() {
+    let (mut deps, env) = setup_instantiated();
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: Some(format!("  {NEW_CUSTODIAN}  ")),
+        },
+    )
+    .unwrap();
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.custodian, Some(Addr::unchecked(NEW_CUSTODIAN)));
 }

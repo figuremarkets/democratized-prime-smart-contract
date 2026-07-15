@@ -9,6 +9,7 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_borrower_collateral;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{coin, Addr, Decimal256, Uint128};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
@@ -19,7 +20,6 @@ use provwasm_std::types::provenance::attribute::v1::{
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const BORROWER: &str = "tp1borrower";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -64,6 +64,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         ],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

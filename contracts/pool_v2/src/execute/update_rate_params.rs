@@ -4,14 +4,14 @@
 
 use crate::constants::ATTRIBUTE_ACTION_NAME;
 use crate::model::error::{invalid_funds, ContractError};
-use crate::model::RateParamsV1;
+use crate::model::{ContractStateV1, RateParamsV1};
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
+use crate::utils::assert_custodian;
 use crate::utils::{update_reserve_indexes, WithRates};
 use cosmwasm_std::{ensure, DepsMut, Env, MessageInfo, Response};
-use democratized_prime_lib::common::assert_owner;
 
 pub const ACTION: &str = "update_rate_params";
-pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may update rate parameters";
+pub const ASSERT_CUSTODIAN_ERR: &str = "Only the contract custodian may update rate parameters";
 
 /// Update rate params. Contract owner only; no funds. Accrues reserve to current block with current (old)
 /// params, then replaces rate_params so the new curve applies from this block onward.
@@ -21,8 +21,8 @@ pub fn update_rate_params(
     info: MessageInfo,
     rate_params: RateParamsV1,
 ) -> Result<Response, ContractError> {
-    let mut contract = get_contract_state_v1(deps.storage)?;
-    assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
+    let mut contract: ContractStateV1 = get_contract_state_v1(deps.storage)?;
+    assert_custodian(&contract, &info.sender, ASSERT_CUSTODIAN_ERR)?;
     ensure!(info.funds.is_empty(), invalid_funds("No funds accepted"));
 
     rate_params.validate()?;

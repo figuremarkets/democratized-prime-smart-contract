@@ -3,7 +3,7 @@
 use crate::contract::{execute, query};
 use crate::model::query::LenderStatusResponseV1;
 use crate::msg::{ExecuteMsg, QueryMsg};
-use crate::tests::query::common::{setup_instantiated, OWNER, SOME_USER};
+use crate::tests::query::common::{setup_instantiated, CUSTODIAN, OWNER, SOME_USER};
 use cosmwasm_std::from_json;
 use cosmwasm_std::testing::message_info;
 use cosmwasm_std::Addr;
@@ -31,7 +31,7 @@ fn get_lender_status_after_set_require_commit_true() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -42,6 +42,7 @@ fn get_lender_status_after_set_require_commit_true() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");

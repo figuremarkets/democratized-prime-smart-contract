@@ -13,6 +13,7 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_effective_reserve;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -25,7 +26,6 @@ use provwasm_std::types::provenance::attribute::v1::{
 };
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const SENDER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 const RECIPIENT: &str = "tp1tkn2dwfkx7pmjr2rtgqhtrudsv7h8w2tj6eesv";
 const LENDING_DENOM: &str = "uylds.fcc";
@@ -64,6 +64,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -563,7 +564,7 @@ fn transfer_fails_when_require_commit_on_exit() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -574,6 +575,7 @@ fn transfer_fails_when_require_commit_on_exit() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");

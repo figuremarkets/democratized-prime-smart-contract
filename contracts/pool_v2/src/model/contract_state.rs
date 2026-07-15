@@ -86,11 +86,11 @@ pub struct ContractStateV1 {
     #[serde(rename = "min_borrow")]
     pub min_borrow: Uint128,
 
-    /// Supported collateral assets (asset_id and optional haircut). The contract owner can update via [`crate::msg::ExecuteMsg::UpdateSupportedCollateral`].
+    /// Supported collateral assets (asset_id and optional haircut). The contract custodian can update via [`crate::msg::ExecuteMsg::UpdateSupportedCollateral`].
     #[serde(rename = "sca", default)]
     pub supported_collateral_assets: Vec<CollateralAssetV1>,
 
-    /// Operational state: Active (all allowed), Frozen (Lend/Borrow blocked; Receive for withdraw/transfer allowed), Paused (contract-owner config only).
+    /// Operational state: Active (all allowed), Frozen (Lend/Borrow blocked; Receive for withdraw/transfer allowed), Paused (contract-custodian config only).
     #[serde(rename = "op", default)]
     pub operational_state: OperationalState,
 
@@ -101,6 +101,16 @@ pub struct ContractStateV1 {
     /// Bad-debt handling at liquidation: defer to `deficit_underlying`, or immediate supplier index haircut.
     #[serde(rename = "bdla", default)]
     pub bad_debt_loss_allocation: BadDebtLossAllocation,
+
+    #[serde(rename = "c_a", default)]
+    /// The account serving as the custodian of contract operations. The custodian is granted the ability to execute
+    /// managerial actions in the contract such as
+    /// - set borrower/lender required atttributes
+    /// - set contract operational state
+    /// - update the contract configuration
+    /// - update contract rate parameters
+    /// - update the types of collateral supported by the contract
+    pub custodian: Option<Addr>,
 }
 
 impl ContractStateV1 {

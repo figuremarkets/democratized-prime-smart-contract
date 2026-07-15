@@ -2,12 +2,13 @@
 
 use crate::constants::ATTRIBUTE_ACTION_NAME;
 use crate::contract::execute;
-use crate::execute::update_rate_params::{ACTION, ASSERT_OWNER_ERR};
+use crate::execute::update_rate_params::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
+use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{coin, Addr, Decimal256, Timestamp, Uint128};
@@ -15,7 +16,6 @@ use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
 use provwasm_mocks::mock_provenance_dependencies;
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 
@@ -50,6 +50,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -86,7 +87,7 @@ fn update_rate_params_succeeds() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: new_params.clone(),
         },
@@ -131,7 +132,7 @@ fn update_rate_params_accrues_reserve_to_current_block() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: new_params,
         },
@@ -146,7 +147,7 @@ fn update_rate_params_accrues_reserve_to_current_block() {
 }
 
 #[test]
-fn update_rate_params_fails_non_owner() {
+fn update_rate_params_fails_for_owner() {
     let (mut deps, env) = setup_instantiated();
 
     let new_params = RateParamsV1 {
@@ -161,7 +162,7 @@ fn update_rate_params_fails_non_owner() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked("other"), &[]),
+        message_info(&Addr::unchecked(OWNER), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: new_params,
         },
@@ -170,7 +171,36 @@ fn update_rate_params_fails_non_owner() {
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn update_rate_params_fails_for_non_custodian_user() {
+    let (mut deps, env) = setup_instantiated();
+
+    let new_params = RateParamsV1 {
+        target_rate: Decimal256::from_str("0.10").unwrap(),
+        min_rate: Decimal256::from_str("0.04").unwrap(),
+        max_rate: Decimal256::from_str("0.22").unwrap(),
+        kink_utilization: Decimal256::from_str("0.85").unwrap(),
+        reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        seconds_per_year: 31_536_000,
+    };
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(SOME_USER), &[]),
+        ExecuteMsg::UpdateRateParams {
+            rate_params: new_params,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
     ));
 }
 
@@ -190,7 +220,7 @@ fn update_rate_params_fails_with_funds() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, "uylds.fcc")]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[coin(1, "uylds.fcc")]),
         ExecuteMsg::UpdateRateParams {
             rate_params: new_params,
         },
@@ -221,7 +251,7 @@ fn update_rate_params_fails_invalid_min_gt_target() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: invalid_params,
         },
@@ -253,7 +283,7 @@ fn update_rate_params_fails_reserve_factor_one() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: invalid_params,
         },
@@ -284,7 +314,7 @@ fn update_rate_params_fails_invalid_kink_zero() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: invalid_params,
         },

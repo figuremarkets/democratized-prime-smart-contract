@@ -4,6 +4,7 @@ use crate::constants::REPO_TOKEN_INSTANTIATE_REPLY_ID;
 use crate::instantiate::instantiate_contract;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{InstantiateMsg, RepoTokenConfig};
+pub use crate::tests::query::common::{CUSTODIAN, OWNER};
 use cosmwasm_std::testing::message_info;
 use cosmwasm_std::{
     testing::{mock_env, MockApi},
@@ -49,7 +50,6 @@ pub fn mock_repo_token_instantiate_reply(repo_token_contract: &str) -> Reply {
     }
 }
 
-pub const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 pub const LENDER: &str = "tp1lender";
 /// "u" prefix => 1 ylds.fcc = 10^6 uylds.fcc.
 pub const LENDING_DENOM: &str = "uylds.fcc";
@@ -88,6 +88,7 @@ pub fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

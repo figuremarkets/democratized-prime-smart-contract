@@ -12,6 +12,7 @@ use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_borrower_collateral;
 use crate::tests::fixtures::stale_oracle_price;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -25,7 +26,6 @@ use provwasm_mocks::mock_provenance_dependencies;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
-const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 const BORROWER: &str = "tp1borrower";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -66,6 +66,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 

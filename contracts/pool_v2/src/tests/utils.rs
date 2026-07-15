@@ -1,3 +1,4 @@
+mod custodian_tests;
 mod health_tests;
 mod math_tests;
 mod price_tests;

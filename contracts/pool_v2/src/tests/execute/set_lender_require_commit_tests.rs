@@ -4,7 +4,8 @@ use crate::contract::{execute, query};
 use crate::execute::set_lender_require_commit::ASSERT_OWNER_ERR;
 use crate::model::query::LenderStatusResponseV1;
 use crate::msg::{ExecuteMsg, QueryMsg};
-use crate::tests::instantiate_helpers::{setup_instantiated_contract, LENDING_DENOM, OWNER};
+use crate::tests::instantiate_helpers::{setup_instantiated_contract, LENDING_DENOM};
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use cosmwasm_std::from_json;
 use cosmwasm_std::testing::message_info;
 use cosmwasm_std::{coin, Addr};
@@ -39,12 +40,12 @@ fn set_lender_require_commit_fails_when_no_commit_market_id() {
 }
 
 #[test]
-fn set_lender_require_commit_owner_succeeds_and_persists() {
+fn set_lender_require_commit_custodian_succeeds_and_persists() {
     let (mut deps, env) = setup_instantiated_contract();
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -55,6 +56,7 @@ fn set_lender_require_commit_owner_succeeds_and_persists() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");
@@ -104,12 +106,12 @@ fn set_lender_require_commit_owner_succeeds_and_persists() {
 }
 
 #[test]
-fn set_lender_require_commit_non_owner_fails() {
+fn set_lender_require_commit_for_custodian_fails() {
     let (mut deps, env) = setup_instantiated_contract();
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -120,6 +122,44 @@ fn set_lender_require_commit_non_owner_fails() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .unwrap();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetLenderRequireCommitOnExit {
+            address: LENDER.to_string(),
+            require: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+    ));
+}
+
+#[test]
+fn set_lender_require_commit_owner_fails() {
+    let (mut deps, env) = setup_instantiated_contract();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            commit_market_id: Some(1),
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");
@@ -145,7 +185,7 @@ fn set_lender_require_commit_fails_with_funds() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -156,6 +196,7 @@ fn set_lender_require_commit_fails_with_funds() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");
@@ -181,7 +222,7 @@ fn set_lender_require_commit_none_removes_override() {
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateContractConfig {
             margin_rate: None,
             liquidation_rate: None,
@@ -192,6 +233,7 @@ fn set_lender_require_commit_none_removes_override() {
             max_borrower_collateral_types: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
+            custodian: None,
         },
     )
     .expect("set commit_market_id");

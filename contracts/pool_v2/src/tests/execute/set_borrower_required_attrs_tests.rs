@@ -3,12 +3,12 @@
 
 use crate::constants::MAX_LENDER_BORROWER_REQUIRED_ATTRS;
 use crate::contract::execute;
-use crate::execute::set_borrower_required_attrs::ASSERT_OWNER_ERR;
+use crate::execute::set_borrower_required_attrs::ASSERT_CUSTODIAN_ERR;
 use crate::model::error::ContractError;
 use crate::msg::ExecuteMsg;
 use crate::storage::get_contract_state_v1;
 use crate::tests::instantiate_helpers::{
-    setup_instantiated_contract, LENDER, LENDING_DENOM, OWNER,
+    setup_instantiated_contract, CUSTODIAN, LENDER, LENDING_DENOM, OWNER,
 };
 use cosmwasm_std::testing::message_info;
 use cosmwasm_std::{coin, Addr};
@@ -23,7 +23,7 @@ fn set_borrower_required_attrs_owner_succeeds_and_updates_state() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetBorrowerRequiredAttrs {
             borrower_required_attrs: attrs.clone(),
         },
@@ -34,7 +34,25 @@ fn set_borrower_required_attrs_owner_succeeds_and_updates_state() {
 }
 
 #[test]
-fn set_borrower_required_attrs_non_owner_fails() {
+fn set_borrower_required_attrs_owner_fails() {
+    let (mut deps, env) = setup_instantiated_contract();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetBorrowerRequiredAttrs {
+            borrower_required_attrs: vec!["borrower.kyc".to_string()],
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+    ));
+}
+
+#[test]
+fn set_borrower_required_attrs_non_custodian_fails() {
     let (mut deps, env) = setup_instantiated_contract();
     let err = execute(
         deps.as_mut(),
@@ -47,7 +65,7 @@ fn set_borrower_required_attrs_non_owner_fails() {
     .unwrap_err();
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
     ));
 }
 
@@ -57,7 +75,7 @@ fn set_borrower_required_attrs_fails_with_funds() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::SetBorrowerRequiredAttrs {
             borrower_required_attrs: vec![],
         },
@@ -75,7 +93,7 @@ fn set_borrower_required_attrs_empty_list_allowed() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetBorrowerRequiredAttrs {
             borrower_required_attrs: vec![],
         },
@@ -94,7 +112,7 @@ fn set_borrower_required_attrs_fails_when_over_max_attrs() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::SetBorrowerRequiredAttrs {
             borrower_required_attrs: attrs,
         },

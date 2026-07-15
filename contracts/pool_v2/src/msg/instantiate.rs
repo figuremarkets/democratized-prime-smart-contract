@@ -60,4 +60,6 @@ pub struct InstantiateMsg {
     /// How bad-debt liquidation affects suppliers (see [`crate::model::BadDebtLossAllocation`]). Default: defer to `deficit_underlying`.
     #[serde(default)]
     pub bad_debt_loss_allocation: BadDebtLossAllocation,
+    /// The account serving as the custodian of contract operations.
+    pub custodian: String,
 }

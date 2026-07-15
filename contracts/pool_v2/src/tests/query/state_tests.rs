@@ -4,7 +4,7 @@ use crate::contract::query;
 use crate::model::{ReserveStateV1, StateResponseV1};
 use crate::msg::QueryMsg;
 use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
-use crate::tests::query::common::{setup_instantiated, REPO_TOKEN_CW20};
+use crate::tests::query::common::{setup_instantiated, CUSTODIAN, REPO_TOKEN_CW20};
 use cosmwasm_std::Decimal256;
 use cosmwasm_std::{from_json, Uint128};
 use std::str::FromStr;
@@ -55,4 +55,15 @@ fn get_state_returns_accrued_reserve_after_usage() {
     assert_eq!(decoded.borrow_index, used.borrow_index);
     assert_eq!(decoded.total_scaled_liquidity, 100_000);
     assert_eq!(decoded.total_scaled_borrow, 50_000);
+}
+
+#[test]
+fn get_state_includes_custodian() {
+    let (deps, env) = setup_instantiated();
+    let bin = query(deps.as_ref(), env, QueryMsg::GetState {}).expect("query should succeed");
+    let state: StateResponseV1 = from_json(bin).unwrap();
+    assert_eq!(
+        state.contract.custodian,
+        Some(cosmwasm_std::Addr::unchecked(CUSTODIAN))
+    );
 }

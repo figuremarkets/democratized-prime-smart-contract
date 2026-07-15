@@ -9,7 +9,7 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
-use crate::tests::instantiate_helpers::mock_repo_token_instantiate_reply;
+use crate::tests::instantiate_helpers::{mock_repo_token_instantiate_reply, CUSTODIAN};
 use cosmwasm_std::testing::{message_info, mock_env};
 use cosmwasm_std::{Addr, CosmosMsg, Decimal256, Uint128, WasmMsg};
 use cw2::get_contract_version;
@@ -54,6 +54,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         }],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
+        custodian: CUSTODIAN.to_owned(),
     }
 }
 
@@ -356,6 +357,60 @@ fn instantiate_fails_empty_price_oracle_address() {
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
+}
+
+#[test]
+fn instantiate_stores_custodian_in_state() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let msg = default_instantiate_msg();
+
+    instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate should succeed");
+
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(state.custodian, Some(Addr::unchecked(CUSTODIAN)));
+}
+
+#[test]
+fn instantiate_fails_empty_custodian() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.custodian = "   ".to_string();
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
+}
+
+#[test]
+fn instantiate_fails_invalid_custodian() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.custodian = "not_a_valid_address".to_string();
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
 }
 
 #[test]
