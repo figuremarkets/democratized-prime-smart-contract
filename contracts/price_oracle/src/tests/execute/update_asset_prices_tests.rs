@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod unit {
-    use crate::constants::ATTRIBUTE_ACTION_NAME;
+    use crate::constants::{
+        ATTRIBUTE_ACTION_NAME, ATTRIBUTE_PREVIOUS_PRICES_JSON, ATTRIBUTE_UPDATED_PRICES_JSON,
+    };
     use crate::contract::execute;
     use crate::execute::update_asset_prices::ASSERT_OWNER_ERR;
     use crate::model::error::ContractError;
@@ -15,7 +17,9 @@ mod unit {
     use cosmwasm_std::testing::message_info;
     use cosmwasm_std::{coin, Addr, Decimal256, Response, Timestamp};
     use democratized_prime_lib::common::{illegal_argument, invalid_funds};
+    use democratized_prime_lib::price_oracle::model::AssetPriceResponseV1;
     use result_extensions::ResultExtensions;
+    use std::collections::BTreeMap;
     use std::str::FromStr;
 
     #[test]
@@ -102,12 +106,7 @@ mod unit {
         };
 
         let result = execute(deps.as_mut(), env, info.clone(), msg);
-        assert_eq!(
-            result,
-            Response::new()
-                .add_attribute(ATTRIBUTE_ACTION_NAME, "set_asset_prices")
-                .to_ok(),
-        );
+        result.unwrap();
 
         let prices = get_sorted_prices_v1(&deps.storage, None, 100).unwrap();
         assert_eq!(prices.len(), 2);
@@ -140,6 +139,102 @@ mod unit {
     }
 
     #[test]
+    fn update_asset_prices_emits_price_diff_json_on_first_set() {
+        let mut deps = mock_dependencies(&vec![]);
+        let env = mock_env_with_timestamp(Timestamp::from_seconds(EPOCH_SECOND_JAN_01_2025));
+        let sender_addr = Addr::unchecked(ADMIN_ADDRESS);
+        let info = message_info(&sender_addr, &vec![]);
+
+        ContractStateV1Builder::new().build_and_store(&mut deps);
+
+        let msg = ExecuteMsg::UpdateAssetPrices {
+            prices: vec![PriceUpdateV1 {
+                asset: DENOM0.to_string(),
+                usd: Decimal256::from_str("1234.567").unwrap(),
+                as_of: Some(Timestamp::from_seconds(EPOCH_SECOND_JAN_01_2025.clone())),
+            }],
+        };
+
+        let result = execute(deps.as_mut(), env, info, msg).unwrap();
+        let updated_price = AssetPriceResponseV1 {
+            price_usd: Decimal256::from_str("1234.567").unwrap(),
+            as_of_epoch_second: EPOCH_SECOND_JAN_01_2025,
+            expiration_epoch_seconds: EPOCH_SECOND_JAN_01_2025 + 30,
+        };
+        let mut updated_prices = BTreeMap::new();
+        updated_prices.insert(DENOM0.to_string(), updated_price);
+
+        assert_eq!(
+            result,
+            Response::new()
+                .add_attribute(ATTRIBUTE_ACTION_NAME, "set_asset_prices")
+                .add_attribute(ATTRIBUTE_PREVIOUS_PRICES_JSON, "{}")
+                .add_attribute(
+                    ATTRIBUTE_UPDATED_PRICES_JSON,
+                    serde_json::to_string(&updated_prices).unwrap()
+                )
+        );
+    }
+
+    #[test]
+    fn update_asset_prices_emits_price_diff_json_on_existing_price() {
+        let mut deps = mock_dependencies(&vec![]);
+        let env = mock_env_with_timestamp(Timestamp::from_seconds(EPOCH_SECOND_JAN_01_2025));
+        let sender_addr = Addr::unchecked(ADMIN_ADDRESS);
+        let info = message_info(&sender_addr, &vec![]);
+
+        ContractStateV1Builder::new().build_and_store(&mut deps);
+        PriceV1Builder::new()
+            .set_asset_id(DENOM0)
+            .set_price_usd(&Decimal256::from_str("1000").unwrap())
+            .set_as_of_time(EPOCH_SECOND_JAN_01_2025 - 100)
+            .build_and_store(deps.as_mut().storage);
+        PriceV1Builder::new()
+            .set_asset_id(DENOM1)
+            .set_price_usd(&Decimal256::from_str("2000").unwrap())
+            .set_as_of_time(EPOCH_SECOND_JAN_01_2025 - 100)
+            .build_and_store(deps.as_mut().storage);
+
+        let msg = ExecuteMsg::UpdateAssetPrices {
+            prices: vec![PriceUpdateV1 {
+                asset: DENOM0.to_string(),
+                usd: Decimal256::from_str("1234.567").unwrap(),
+                as_of: Some(Timestamp::from_seconds(EPOCH_SECOND_JAN_01_2025.clone())),
+            }],
+        };
+
+        let result = execute(deps.as_mut(), env, info, msg).unwrap();
+        let previous_price = AssetPriceResponseV1 {
+            price_usd: Decimal256::from_str("1000").unwrap(),
+            as_of_epoch_second: EPOCH_SECOND_JAN_01_2025 - 100,
+            expiration_epoch_seconds: EPOCH_SECOND_JAN_01_2025 - 70,
+        };
+        let updated_price = AssetPriceResponseV1 {
+            price_usd: Decimal256::from_str("1234.567").unwrap(),
+            as_of_epoch_second: EPOCH_SECOND_JAN_01_2025,
+            expiration_epoch_seconds: EPOCH_SECOND_JAN_01_2025 + 30,
+        };
+        let mut previous_prices = BTreeMap::new();
+        previous_prices.insert(DENOM0.to_string(), previous_price);
+        let mut updated_prices = BTreeMap::new();
+        updated_prices.insert(DENOM0.to_string(), updated_price);
+
+        assert_eq!(
+            result,
+            Response::new()
+                .add_attribute(ATTRIBUTE_ACTION_NAME, "set_asset_prices")
+                .add_attribute(
+                    ATTRIBUTE_PREVIOUS_PRICES_JSON,
+                    serde_json::to_string(&previous_prices).unwrap()
+                )
+                .add_attribute(
+                    ATTRIBUTE_UPDATED_PRICES_JSON,
+                    serde_json::to_string(&updated_prices).unwrap()
+                )
+        );
+    }
+
+    #[test]
     fn empty_update_as_of_time_then_save_block_time_and_return_ok() {
         let mut deps = mock_dependencies(&vec![]);
         let env = mock_env_with_timestamp(Timestamp::from_seconds(EPOCH_SECOND_JAN_01_2025));
@@ -165,12 +260,7 @@ mod unit {
         };
 
         let result = execute(deps.as_mut(), env.clone(), info.clone(), msg);
-        assert_eq!(
-            result,
-            Response::new()
-                .add_attribute(ATTRIBUTE_ACTION_NAME, "set_asset_prices")
-                .to_ok(),
-        );
+        result.unwrap();
 
         let prices = get_sorted_prices_v1(&deps.storage, None, 100).unwrap();
         assert_eq!(prices.len(), 2);
@@ -454,12 +544,7 @@ mod unit {
         };
 
         let result = execute(deps.as_mut(), env, info.clone(), msg);
-        assert_eq!(
-            result,
-            Response::new()
-                .add_attribute(ATTRIBUTE_ACTION_NAME, "set_asset_prices")
-                .to_ok(),
-        );
+        result.unwrap();
 
         // Updated prices
         let prices = get_sorted_prices_v1(&deps.storage, None, 100).unwrap();

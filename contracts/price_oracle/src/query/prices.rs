@@ -35,7 +35,7 @@ pub fn query_prices_by_assets(
 
         prices.insert(
             requested_asset_id,
-            (display_asset_metadata, price).into_response(),
+            (display_asset_metadata, price).into_response()?,
         );
     }
 
@@ -65,7 +65,7 @@ pub fn query_prices_batch(
                 |am| (asset_id, am),
             );
 
-        price_map.insert(display_asset_id, (asset_metadata, price).into_response());
+        price_map.insert(display_asset_id, (asset_metadata, price).into_response()?);
     }
 
     query_convert_to_binary(&price_map)
