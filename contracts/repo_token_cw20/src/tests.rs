@@ -18,6 +18,7 @@ use cosmwasm_std::{
 };
 use cw20::{AllAccountsResponse, BalanceResponse, TokenInfoResponse};
 use cw_ownable::{get_ownership, Action};
+use democratized_prime_lib::repo_token::ExtendedTokenInfoResponse;
 use provwasm_mocks::mock_provenance_dependencies;
 
 // Valid Provenance bech32 (tp1) addresses so addr_validate passes in tests.
@@ -225,6 +226,66 @@ fn query_token_info_total_supply_with_pool_is_underlying() {
     let info: TokenInfoResponse = from_json(bin).unwrap();
     // 200_000 * 1.1 = 220_000
     assert_eq!(info.total_supply, Uint128::from(220_000u128));
+}
+
+// --- Query: ExtendedTokenInfo total_supply is scaled without pool, underlying with pool ---
+
+#[test]
+fn query_extended_token_info_without_pool_is_scaled() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    instantiate_default(&mut deps);
+    let env = mock_env();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(MINTER), &[]),
+        ExecuteMsg::Mint {
+            recipient: USER.to_string(),
+            amount: Uint128::from(500_000u128),
+        },
+    )
+    .unwrap();
+
+    let bin = query(deps.as_ref(), env, QueryMsg::ExtendedTokenInfo {}).unwrap();
+    let info: ExtendedTokenInfoResponse = from_json(bin).unwrap();
+    assert_eq!(info.total_supply, Uint128::from(500_000u128));
+    assert_eq!(info.total_scaled_supply, Uint128::from(500_000u128));
+}
+
+#[test]
+fn query_extended_token_info_with_pool_is_underlying() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let msg = InstantiateMsg {
+        pool_address: Some(POOL.to_string()),
+        ..default_instantiate_msg()
+    };
+    let env = mock_env();
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(ADMIN), &[]),
+        msg,
+    )
+    .unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(MINTER), &[]),
+        ExecuteMsg::Mint {
+            recipient: USER.to_string(),
+            amount: Uint128::from(200_000u128),
+        },
+    )
+    .unwrap();
+    mock_pool_reserve(&mut deps.querier, POOL, "1.1");
+
+    let bin = query(deps.as_ref(), env, QueryMsg::ExtendedTokenInfo {}).unwrap();
+    let info: ExtendedTokenInfoResponse = from_json(bin).unwrap();
+    // 200_000 * 1.1 = 220_000
+    assert_eq!(info.total_supply, Uint128::from(220_000u128));
+    assert_eq!(info.total_scaled_supply, Uint128::from(200_000u128));
 }
 
 // --- Auth: only minter can mint ---

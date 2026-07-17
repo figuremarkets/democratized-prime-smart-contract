@@ -4,10 +4,11 @@ use crate::msg::QueryMsg;
 use crate::pool_query::query_liquidity_index;
 use crate::state::{BALANCES, CONFIG, TOKEN_INFO};
 use crate::utils::scaled_to_underlying_floor;
-use cosmwasm_std::{to_json_binary, Addr, Binary, Deps, Env, Order, Uint128};
+use cosmwasm_std::{to_json_binary, Addr, Binary, Decimal256, Deps, Env, Order, Uint128};
 use cw20::{AllAccountsResponse, BalanceResponse, MinterResponse, TokenInfoResponse};
 use cw_ownable::get_ownership;
 use cw_storage_plus::Bound;
+use democratized_prime_lib::repo_token::ExtendedTokenInfoResponse;
 
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> Result<Binary, ContractError> {
     match msg {
@@ -22,6 +23,10 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> Result<Binary, ContractErro
         }
         QueryMsg::TokenInfo {} => {
             let info = query_token_info(deps, env)?;
+            to_json_binary(&info).map_err(Into::into)
+        }
+        QueryMsg::ExtendedTokenInfo {} => {
+            let info = query_extended_token_info(deps, env)?;
             to_json_binary(&info).map_err(Into::into)
         }
         QueryMsg::Minter {} => {
@@ -42,8 +47,8 @@ fn query_balance(deps: Deps, _env: Env, address: &str) -> Result<BalanceResponse
         .may_load(deps.storage, addr)?
         .unwrap_or(Uint128::zero());
     let config = CONFIG.load(deps.storage)?;
-    let amount = if let Some(ref pool_address) = config.pool_address {
-        let index = query_liquidity_index(&deps.querier, pool_address)?;
+    let amount: Uint128 = if let Some(ref pool_address) = config.pool_address {
+        let index: Decimal256 = query_liquidity_index(&deps.querier, pool_address)?;
         let underlying = scaled_to_underlying_floor(scaled.u128(), index)?;
         Uint128::from(underlying)
     } else {
@@ -79,6 +84,31 @@ fn query_token_info(deps: Deps, _env: Env) -> Result<TokenInfoResponse, Contract
         symbol: info.symbol,
         decimals: info.decimals,
         total_supply,
+    })
+}
+
+/// Returns TokenInfo with extended data; total_supply in underlying when pool_address is set.
+fn query_extended_token_info(
+    deps: Deps,
+    _env: Env,
+) -> Result<ExtendedTokenInfoResponse, ContractError> {
+    let info = TOKEN_INFO.load(deps.storage)?;
+    let config = CONFIG.load(deps.storage)?;
+    let total_scaled_supply: Uint128 = info.total_supply;
+    let total_supply: Uint128 = if let Some(ref pool) = config.pool_address {
+        let pool_addr = deps.api.addr_validate(pool.as_str())?;
+        let index: Decimal256 = query_liquidity_index(&deps.querier, &pool_addr)?;
+        let underlying = scaled_to_underlying_floor(total_scaled_supply.u128(), index)?;
+        Uint128::from(underlying)
+    } else {
+        total_scaled_supply
+    };
+    Ok(ExtendedTokenInfoResponse {
+        name: info.name,
+        symbol: info.symbol,
+        decimals: info.decimals,
+        total_supply,
+        total_scaled_supply,
     })
 }
 
