@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InstantiateMsg",
+  "description": "JSON for **`repo_token_cw20`** `instantiate` and for **`pool_v2`**’s `WasmMsg::Instantiate` submessage when creating the repo token in the same transaction.",
+  "type": "object",
+  "required": [
+    "decimals",
+    "minter",
+    "name",
+    "owner",
+    "symbol"
+  ],
+  "properties": {
+    "decimals": {
+      "description": "Token decimals (typically same as lending denom, e.g. 6 for uylds.fcc).",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0.0
+    },
+    "minter": {
+      "description": "Minter (only this address may mint/burn). Often the pool; may start as admin if the repo is deployed before the pool, then **UpdateConfig** wires the pool.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "owner": {
+      "description": "Initial owner (may transfer via `cw_ownable`); may call UpdateConfig to set minter/pool_address when the token was created standalone.",
+      "type": "string"
+    },
+    "pool_address": {
+      "description": "Pool address for Balance/TokenInfo to return underlying (`GetReserve` / liquidity index). Set at instantiate when pool_v2 uses **`repo_token.new`**, or later via **UpdateConfig** on the “existing token” path.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "symbol": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

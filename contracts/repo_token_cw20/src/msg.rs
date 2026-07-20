@@ -48,7 +48,7 @@ pub enum QueryMsg {
     /// CW20 TokenInfo. total_supply is underlying when pool_address is set.
     #[returns(TokenInfoResponse)]
     TokenInfo {},
-    // Like CW20 TokenInfo, but with additional properties.
+    /// Like CW20 TokenInfo, but with additional properties.
     #[returns(ExtendedTokenInfoResponse)]
     ExtendedTokenInfo {},
     /// CW20 Minter.
