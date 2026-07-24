@@ -6,18 +6,26 @@ If you believe you have found a **security vulnerability** in this repository, p
 
 ## How to report
 
-1. **Preferred (if enabled):** Use GitHub **Security** → **Report a vulnerability** for this repository ([private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)).
+1. **Preferred:** Submit the report through Figure's **Vulnerability Disclosure Program**:
 
-2. **Otherwise:** Contact **Figure Markets, Inc.** through the same channels you would use for matters under the [LICENSE](../LICENSE) (e.g. commercial or licensing inquiries), with a subject line that includes **Security** and the name of this repository.
+   **→ https://vdp.figure.com/**
+
+   This is Figure's official intake for security issues across any asset Figure owns, operates, or maintains — including the contracts in this repository. Figure's Security team acknowledges each report and coordinates investigation and remediation.
+
+2. **Alternative (repository-scoped):** Use GitHub **Security** → **Report a vulnerability** for this repository ([private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)). Reports may be routed to the VDP for tracking.
 
 ## What to include
 
-- A short description of the issue and its impact  
+The VDP form will prompt for these; include them wherever you report:
+
+- A short summary of the issue and its impact  
 - Affected contract(s), paths, or release / commit if known  
 - Steps to reproduce, or a proof-of-concept where safe to share  
 - Whether you believe any **mainnet** deployment is affected (if known)  
 
-Encrypted contact (e.g. PGP) may be published by Figure Markets separately; use that if offered.
+## Responsible disclosure
+
+Please give Figure's Security team reasonable time to validate and remediate before any public disclosure, avoid privacy violations, data destruction, and disruption to production systems while testing, and refrain from publicly disclosing an unverified vulnerability until it has been addressed.
 
 ## Scope (in scope)
 
