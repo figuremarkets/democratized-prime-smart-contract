@@ -2,6 +2,7 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Binary, Uint128};
 use cw20::{AllAccountsResponse, BalanceResponse, MinterResponse, TokenInfoResponse};
 use cw_ownable::{cw_ownable_execute, cw_ownable_query};
+use democratized_prime_lib::repo_token::ExtendedTokenInfoResponse;
 
 /// Shared with **`pool_v2`** (`WasmMsg::Instantiate` for `repo_token.new`): same JSON as `democratized_prime_lib::repo_token::InstantiateMsg`.
 pub use democratized_prime_lib::repo_token::InstantiateMsg;
@@ -47,6 +48,9 @@ pub enum QueryMsg {
     /// CW20 TokenInfo. total_supply is underlying when pool_address is set.
     #[returns(TokenInfoResponse)]
     TokenInfo {},
+    /// Like CW20 TokenInfo, but with additional properties.
+    #[returns(ExtendedTokenInfoResponse)]
+    ExtendedTokenInfo {},
     /// CW20 Minter.
     #[returns(MinterResponse)]
     Minter {},

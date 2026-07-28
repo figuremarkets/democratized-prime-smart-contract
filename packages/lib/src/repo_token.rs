@@ -1,7 +1,8 @@
 //! Shared repo (receipt) CW20 **instantiate** message and validation used by `repo_token_cw20` and
 //! `pool_v2` (SubMsg JSON must match the contract’s `instantiate` schema).
-
+pub mod model;
 use cosmwasm_schema::cw_serde;
+pub use model::ExtendedTokenInfoResponse;
 
 /// JSON for **`repo_token_cw20`** `instantiate` and for **`pool_v2`**’s `WasmMsg::Instantiate` submessage when creating the repo token in the same transaction.
 #[cw_serde]

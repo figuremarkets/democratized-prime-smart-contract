@@ -61,6 +61,20 @@
       "additionalProperties": false
     },
     {
+      "description": "Like CW20 TokenInfo, but with additional properties.",
+      "type": "object",
+      "required": [
+        "extended_token_info"
+      ],
+      "properties": {
+        "extended_token_info": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
       "description": "CW20 Minter.",
       "type": "object",
       "required": [
