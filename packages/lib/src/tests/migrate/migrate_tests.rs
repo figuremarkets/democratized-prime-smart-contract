@@ -8,7 +8,7 @@ use cosmwasm_std::Response;
 use cw2::{get_contract_version, set_contract_version};
 use provwasm_mocks::mock_provenance_dependencies;
 pub const CONTRACT_NAME: &str = "test-contract";
-pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CONTRACT_VERSION: &str = env!("CONTRACT_BUILD_VERSION");
 
 #[test]
 fn migration_fails_when_same_version() {
