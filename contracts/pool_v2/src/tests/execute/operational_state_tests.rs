@@ -102,6 +102,93 @@ fn owner_can_set_operational_state_when_custodian_unset() {
 }
 
 #[test]
+fn owner_can_restore_operational_state_from_frozen() {
+    let (mut deps, env) = setup();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .expect("custodian should be able to freeze the contract");
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Active,
+        },
+    )
+    .expect("owner should be able to restore the contract from frozen state");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Active);
+}
+
+#[test]
+fn owner_can_set_operational_state_when_paused_and_custodian_unset() {
+    let (mut deps, env) = setup();
+    let mut contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    contract.custodian = None;
+    set_contract_state_v1(deps.as_mut().storage, &contract).unwrap();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Paused,
+        },
+    )
+    .expect("owner should be able to pause the contract when custodian is unset");
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Active,
+        },
+    )
+    .expect(
+        "owner should be able to restore the contract from paused state when custodian is unset",
+    );
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Active);
+}
+
+#[test]
+fn owner_can_change_operational_state_from_paused_to_frozen() {
+    let (mut deps, env) = setup();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Paused,
+        },
+    )
+    .expect("custodian should be able to pause the contract");
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .expect("owner should be able to change the state from paused to frozen");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Frozen);
+}
+
+#[test]
 fn set_operational_state_fails_with_funds() {
     let (mut deps, env) = setup();
     let err = execute(
