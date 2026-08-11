@@ -19,6 +19,11 @@ pub fn assert_owner(
     })
 }
 
+/// Wrapper around [`cw_ownable::is_owner`].
+pub fn is_owner(storage: &dyn Storage, sender: &Addr) -> Result<bool, ContractError> {
+    cw_ownable::is_owner(storage, sender).map_err(Into::into)
+}
+
 /// Value of the primary [`ATTRIBUTE_ACTION_NAME`] response attribute for ownership changes.
 pub const UPDATE_OWNERSHIP_ACTION: &str = "update_ownership";
 

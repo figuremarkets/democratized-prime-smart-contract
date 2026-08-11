@@ -5,7 +5,7 @@
 //! SetOperationalState accepts no funds.
 
 use crate::contract::execute;
-use crate::execute::set_operational_state::ASSERT_CUSTODIAN_ERR;
+use crate::execute::set_operational_state::ASSERT_PERMISSION_ERR;
 use crate::model::error::{illegal_argument, ContractError};
 use crate::model::{CollateralAssetV1, OperationalState, RateParamsV1};
 use crate::msg::execute::Cw20ReceivePayload;
@@ -46,9 +46,9 @@ fn set_paused(
 }
 
 #[test]
-fn set_operational_state_owner_fails() {
+fn owner_can_set_operational_state() {
     let (mut deps, env) = setup();
-    let err = execute(
+    execute(
         deps.as_mut(),
         env,
         message_info(&Addr::unchecked(OWNER), &[]),
@@ -56,15 +56,14 @@ fn set_operational_state_owner_fails() {
             state: OperationalState::Frozen,
         },
     )
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
-    ));
+    .expect("owner should be able to set operational state");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Frozen);
 }
 
 #[test]
-fn set_operational_state_non_custodian_fails() {
+fn non_custodian_non_owner_cannot_set_operational_state() {
     let (mut deps, env) = setup();
     let err = execute(
         deps.as_mut(),
@@ -77,31 +76,29 @@ fn set_operational_state_non_custodian_fails() {
     .unwrap_err();
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_PERMISSION_ERR
     ));
 }
 
 #[test]
-fn set_operational_state_fails_when_custodian_unset() {
+fn owner_can_set_operational_state_when_custodian_unset() {
     let (mut deps, env) = setup();
     let mut contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
     contract.custodian = None;
     set_contract_state_v1(deps.as_mut().storage, &contract).unwrap();
 
-    let err = execute(
+    execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        message_info(&Addr::unchecked(OWNER), &[]),
         ExecuteMsg::SetOperationalState {
             state: OperationalState::Frozen,
         },
     )
-    .unwrap_err();
+    .expect("owner should still be able to set operational state when custodian is unset");
 
-    assert!(matches!(
-        err,
-        ContractError::NotAuthorizedError { message } if message == "contract custodian not set"
-    ));
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Frozen);
 }
 
 #[test]
@@ -127,6 +124,23 @@ fn get_state_returns_operational_state_active_after_instantiate() {
     let (deps, _env) = setup();
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(contract.operational_state, OperationalState::Active);
+}
+
+#[test]
+fn custodian_can_set_operational_state() {
+    let (mut deps, env) = setup();
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Frozen,
+        },
+    )
+    .expect("custodian should be able to set operational state");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Frozen);
 }
 
 #[test]
@@ -234,7 +248,7 @@ fn paused_blocks_lend() {
 }
 
 #[test]
-fn paused_allows_set_operational_state() {
+fn owner_can_restore_operational_state_from_paused() {
     let (mut deps, env) = setup();
     execute(
         deps.as_mut(),
@@ -246,7 +260,33 @@ fn paused_allows_set_operational_state() {
     )
     .expect("set paused");
 
-    // The contract owner can set back to Active while paused
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Active,
+        },
+    )
+    .expect("owner should be able to restore the contract from paused state");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.operational_state, OperationalState::Active);
+}
+
+#[test]
+fn custodian_can_restore_operational_state_from_paused() {
+    let (mut deps, env) = setup();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SetOperationalState {
+            state: OperationalState::Paused,
+        },
+    )
+    .expect("set paused");
+
     execute(
         deps.as_mut(),
         env.clone(),
@@ -255,7 +295,7 @@ fn paused_allows_set_operational_state() {
             state: OperationalState::Active,
         },
     )
-    .expect("set active should succeed");
+    .expect("custodian should be able to restore the contract from paused state");
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(contract.operational_state, OperationalState::Active);
@@ -772,35 +812,6 @@ fn paused_allows_update_ownership() {
 
     let o = get_ownership(deps.as_ref().storage).unwrap();
     assert_eq!(o.owner, Some(Addr::unchecked(NEW_OWNER)));
-}
-
-#[test]
-fn paused_owner_cannot_set_operational_state() {
-    let (mut deps, env) = setup();
-    execute(
-        deps.as_mut(),
-        env.clone(),
-        message_info(&Addr::unchecked(CUSTODIAN), &[]),
-        ExecuteMsg::SetOperationalState {
-            state: OperationalState::Paused,
-        },
-    )
-    .unwrap();
-
-    let err = execute(
-        deps.as_mut(),
-        env,
-        message_info(&Addr::unchecked(OWNER), &[]),
-        ExecuteMsg::SetOperationalState {
-            state: OperationalState::Active,
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_CUSTODIAN_ERR
-    ));
 }
 
 #[test]

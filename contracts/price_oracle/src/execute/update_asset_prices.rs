@@ -1,9 +1,7 @@
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_PREVIOUS_PRICES_JSON, ATTRIBUTE_UPDATED_PRICES_JSON,
 };
-use crate::model::{
-    error::ContractError, IntoAssetPriceResponse, PriceUpdateV1, PriceV1,
-};
+use crate::model::{error::ContractError, IntoAssetPriceResponse, PriceUpdateV1, PriceV1};
 use crate::storage::{get_or_default_asset_mapping_v1, save_usd_price_v1, try_get_usd_price_v1};
 use crate::utils::validate_name_uniqueness;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
@@ -52,11 +50,7 @@ pub fn try_update_asset_prices(
 
         price_update.validate(env.block.time)?;
         let new_price: PriceV1 = (&env, &price_update).into();
-        save_usd_price_v1(
-            deps.storage,
-            price_update.asset.clone(),
-            &new_price,
-        )?;
+        save_usd_price_v1(deps.storage, price_update.asset.clone(), &new_price)?;
         updated_prices.insert(
             display_asset_id,
             (asset_metadata, new_price).into_response()?,

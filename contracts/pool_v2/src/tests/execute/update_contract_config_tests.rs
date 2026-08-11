@@ -3,7 +3,7 @@
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::contract::execute;
-use crate::execute::set_operational_state::ASSERT_CUSTODIAN_ERR as SET_OP_ASSERT_CUSTODIAN_ERR;
+use crate::execute::set_operational_state::ASSERT_PERMISSION_ERR;
 use crate::execute::update_contract_config::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
@@ -1039,7 +1039,7 @@ fn transferred_custodian_gates_set_operational_state() {
     .unwrap_err();
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == SET_OP_ASSERT_CUSTODIAN_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_PERMISSION_ERR
     ));
 
     execute(
