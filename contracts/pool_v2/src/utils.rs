@@ -1,18 +1,18 @@
-pub mod custodian;
 pub mod health;
 pub mod math;
 pub mod ownership;
+pub mod permission;
 pub mod price;
 pub mod rates;
 pub mod response_ext;
 pub mod validation;
 
-pub use custodian::assert_custodian;
 pub use health::{
     calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_value_usd,
     get_borrower_health, get_health_from_ltv, validate_borrower_is_healthy,
 };
 pub use math::{decimal256_ceil_to_u128, format_as_percent_string, uint128_to_decimal256};
+pub use permission::{assert_custodian, assert_owner_or_custodian};
 pub use price::{get_asset_prices_for_borrower, get_price_from_oracle};
 pub use rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization,
