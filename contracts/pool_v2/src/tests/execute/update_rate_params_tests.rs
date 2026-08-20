@@ -193,6 +193,8 @@ fn update_rate_params_fails_for_non_custodian_user() {
         max_rate: Decimal256::from_str("0.22").unwrap(),
         kink_utilization: Decimal256::from_str("0.85").unwrap(),
         reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: Default::default(),
+        flat_fee_apr: Decimal256::zero(),
         seconds_per_year: 31_536_000,
     };
 
@@ -362,7 +364,7 @@ fn update_rate_params_succeeds_flat_borrow_spread_mode() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: new_params.clone(),
         },
@@ -391,7 +393,7 @@ fn update_rate_params_fails_reserve_factor_with_non_zero_flat_fee() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
         ExecuteMsg::UpdateRateParams {
             rate_params: invalid_params,
         },

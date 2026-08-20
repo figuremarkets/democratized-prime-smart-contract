@@ -425,6 +425,8 @@ fn paused_allows_custodian_config_messages() {
                 max_rate: Decimal256::from_str("0.25").unwrap(),
                 kink_utilization: Decimal256::from_str("0.85").unwrap(),
                 reserve_factor: Decimal256::from_str("0.01").unwrap(),
+                fee_model: Default::default(),
+                flat_fee_apr: Decimal256::zero(),
                 seconds_per_year: 31_536_000,
             },
         },

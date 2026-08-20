@@ -334,7 +334,7 @@
               "minimum": 0.0
             },
             "custodian": {
-              "description": "If provider, custodianship will be transferred to the given account.",
+              "description": "If provided, custodianship will be transferred to the given account.",
               "type": [
                 "string",
                 "null"
