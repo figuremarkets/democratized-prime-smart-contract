@@ -8,6 +8,16 @@ use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
 use crate::utils::compute_effective_reserve;
 use cosmwasm_std::{Response, Storage, Timestamp};
 
+fn attr_value<'a>(res: &'a Response, key: &str) -> &'a str {
+    let keys: Vec<&str> = res.attributes.iter().map(|a| a.key.as_str()).collect();
+    res.attributes
+        .iter()
+        .find(|a| a.key == key)
+        .unwrap_or_else(|| panic!("expected attribute {:?}, found keys {:?}", key, keys))
+        .value
+        .as_str()
+}
+
 fn assert_lend_borrow_rate_attributes_match_expected(
     res: &Response,
     expected_lend: &str,
@@ -16,79 +26,33 @@ fn assert_lend_borrow_rate_attributes_match_expected(
     expected_bi: &str,
     expected_util: &str,
 ) {
-    let keys: Vec<&str> = res.attributes.iter().map(|a| a.key.as_str()).collect();
-    let lend = res
-        .attributes
-        .iter()
-        .find(|a| a.key == ATTRIBUTE_LEND_RATE)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected attribute {:?}, found keys {:?}",
-                ATTRIBUTE_LEND_RATE, keys
-            )
-        });
-    let borrow = res
-        .attributes
-        .iter()
-        .find(|a| a.key == ATTRIBUTE_BORROW_RATE)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected attribute {:?}, found keys {:?}",
-                ATTRIBUTE_BORROW_RATE, keys
-            )
-        });
-    let li = res
-        .attributes
-        .iter()
-        .find(|a| a.key == ATTRIBUTE_LIQUIDITY_INDEX)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected attribute {:?}, found keys {:?}",
-                ATTRIBUTE_LIQUIDITY_INDEX, keys
-            )
-        });
-    let bi = res
-        .attributes
-        .iter()
-        .find(|a| a.key == ATTRIBUTE_BORROW_INDEX)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected attribute {:?}, found keys {:?}",
-                ATTRIBUTE_BORROW_INDEX, keys
-            )
-        });
-    let util = res
-        .attributes
-        .iter()
-        .find(|a| a.key == ATTRIBUTE_UTILIZATION)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected attribute {:?}, found keys {:?}",
-                ATTRIBUTE_UTILIZATION, keys
-            )
-        });
     assert_eq!(
-        lend.value, expected_lend,
+        attr_value(res, ATTRIBUTE_LEND_RATE),
+        expected_lend,
         "attribute {:?} mismatch",
         ATTRIBUTE_LEND_RATE
     );
     assert_eq!(
-        borrow.value, expected_borrow,
+        attr_value(res, ATTRIBUTE_BORROW_RATE),
+        expected_borrow,
         "attribute {:?} mismatch",
         ATTRIBUTE_BORROW_RATE
     );
     assert_eq!(
-        li.value, expected_li,
+        attr_value(res, ATTRIBUTE_LIQUIDITY_INDEX),
+        expected_li,
         "attribute {:?} mismatch",
         ATTRIBUTE_LIQUIDITY_INDEX
     );
     assert_eq!(
-        bi.value, expected_bi,
+        attr_value(res, ATTRIBUTE_BORROW_INDEX),
+        expected_bi,
         "attribute {:?} mismatch",
         ATTRIBUTE_BORROW_INDEX
     );
     assert_eq!(
-        util.value, expected_util,
+        attr_value(res, ATTRIBUTE_UTILIZATION),
+        expected_util,
         "attribute {:?} mismatch",
         ATTRIBUTE_UTILIZATION
     );

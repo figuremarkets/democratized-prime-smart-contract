@@ -1,6 +1,6 @@
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, CONTRACT_NAME, CONTRACT_VERSION, MAX_LENDER_BORROWER_REQUIRED_ATTRS,
-    REPO_TOKEN_INSTANTIATE_REPLY_ID,
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_RATE_PARAMS_JSON, CONTRACT_NAME, CONTRACT_VERSION,
+    MAX_LENDER_BORROWER_REQUIRED_ATTRS, REPO_TOKEN_INSTANTIATE_REPLY_ID,
 };
 use crate::model::error::{illegal_argument, ContractError};
 use crate::model::{ContractStateV1, OperationalState, ReserveStateV1};
@@ -199,7 +199,12 @@ pub fn instantiate_contract(
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    let mut response = Response::new().add_attribute(ATTRIBUTE_ACTION_NAME, ACTION);
+    let mut response = Response::new()
+        .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
+        .add_attribute(
+            ATTRIBUTE_RATE_PARAMS_JSON,
+            serde_json::to_string(&contract_state.rate_params).unwrap_or_default(),
+        );
 
     if let Some((repo_token_code_id, repo_token_name, repo_token_symbol, repo_token_decimals)) =
         new_repo_token_instantiate
