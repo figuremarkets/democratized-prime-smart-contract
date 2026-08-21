@@ -2,7 +2,8 @@
 //! existing marker path (no create message), and state/cw2 version storage.
 
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, CONTRACT_NAME, CONTRACT_VERSION, MAX_LENDER_BORROWER_REQUIRED_ATTRS,
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_RATE_PARAMS_JSON, CONTRACT_NAME, CONTRACT_VERSION,
+    MAX_LENDER_BORROWER_REQUIRED_ATTRS,
 };
 use crate::instantiate::{instantiate_contract, reply};
 use crate::model::error::ContractError;
@@ -110,9 +111,13 @@ fn instantiate_success_stores_state_emits_repo_token_submsg_and_reply_binds_addr
     let res = instantiate_contract(deps.as_mut(), env.clone(), info.clone(), msg.clone())
         .expect("instantiate should succeed");
 
-    assert_eq!(res.attributes.len(), 1);
+    assert_eq!(res.attributes.len(), 2);
     assert_eq!(res.attributes[0].key, ATTRIBUTE_ACTION_NAME);
     assert_eq!(res.attributes[0].value, "instantiate");
+    assert_eq!(res.attributes[1].key, ATTRIBUTE_RATE_PARAMS_JSON);
+    let emitted: RateParamsV1 =
+        serde_json::from_str(&res.attributes[1].value).expect("rate_params_json");
+    assert_eq!(emitted, msg.rate_params);
 
     assert_eq!(res.messages.len(), 1);
     match &res.messages[0].msg {

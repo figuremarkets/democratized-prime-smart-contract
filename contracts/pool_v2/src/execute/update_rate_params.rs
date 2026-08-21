@@ -2,7 +2,7 @@
 //! Accrues reserve indexes to current block time with the *old* params before applying the new ones,
 //! so the new curve applies only from this block onward.
 
-use crate::constants::ATTRIBUTE_ACTION_NAME;
+use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_RATE_PARAMS_JSON};
 use crate::model::error::{invalid_funds, ContractError};
 use crate::model::{ContractStateV1, RateParamsV1};
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
@@ -35,5 +35,9 @@ pub fn update_rate_params(
 
     Response::new()
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
+        .add_attribute(
+            ATTRIBUTE_RATE_PARAMS_JSON,
+            serde_json::to_string(&contract.rate_params).unwrap_or_default(),
+        )
         .attach_rates(&reserve, &contract.rate_params)
 }

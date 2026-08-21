@@ -1,6 +1,6 @@
 //! Tests for UpdateRateParams: success (owner updates), failures for non-owner, with funds, invalid params.
 
-use crate::constants::ATTRIBUTE_ACTION_NAME;
+use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_RATE_PARAMS_JSON};
 use crate::contract::execute;
 use crate::execute::update_rate_params::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
@@ -100,6 +100,10 @@ fn update_rate_params_succeeds() {
 
     assert_eq!(res.attributes[0].key, ATTRIBUTE_ACTION_NAME);
     assert_eq!(res.attributes[0].value, ACTION);
+    assert_eq!(res.attributes[1].key, ATTRIBUTE_RATE_PARAMS_JSON);
+    let emitted: RateParamsV1 =
+        serde_json::from_str(&res.attributes[1].value).expect("rate_params_json");
+    assert_eq!(emitted, new_params);
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
 
@@ -361,7 +365,7 @@ fn update_rate_params_succeeds_flat_borrow_spread_mode() {
         seconds_per_year: 31_536_000,
     };
 
-    execute(
+    let res = execute(
         deps.as_mut(),
         env,
         message_info(&Addr::unchecked(CUSTODIAN), &[]),
@@ -370,6 +374,17 @@ fn update_rate_params_succeeds_flat_borrow_spread_mode() {
         },
     )
     .expect("flat spread update should succeed");
+
+    assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
+    let emitted: RateParamsV1 = serde_json::from_str(
+        &res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_RATE_PARAMS_JSON)
+            .expect("rate_params_json")
+            .value,
+    )
+    .expect("rate_params_json");
+    assert_eq!(emitted, new_params);
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(contract.rate_params.fee_model, FeeModelV1::FlatBorrowSpread);
