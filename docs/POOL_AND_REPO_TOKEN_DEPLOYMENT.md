@@ -100,8 +100,8 @@ Symbols are conventionally **all caps** (e.g. HPYLDS, PUSD, METH). For other len
 
 `rate_params` fee-model fields:
 
-- `fm: "reserve_factor"` keeps legacy split via `rf`; in this mode `ff` must be `"0"`.
-- `fm: "flat_borrow_spread"` uses fixed annual spread `ff` off borrower APR; in this mode `ff <= minr`.
+- `fm: "reserve_factor"` splits via `rf`; in this mode `ff` must be `"0"`.
+- `fm: "flat_borrow_spread"` uses fixed annual spread `ff` off borrower APR; in this mode `rf` must be `"0"` and `ff <= minr`.
 
 **Outcome:** The pool is on-chain and stores the CW20 address. **Do not call Lend yet:** the CW20’s minter is still the admin, so the pool is not allowed to mint.
 

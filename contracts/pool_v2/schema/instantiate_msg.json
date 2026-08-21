@@ -189,7 +189,7 @@
       "description": "Protocol fee routing mode for splitting borrower interest between suppliers and treasury.",
       "oneOf": [
         {
-          "description": "Existing behavior: treasury share = borrower_rate * utilization * reserve_factor.",
+          "description": "Default behavior: treasury share = borrower_rate * utilization * reserve_factor.",
           "type": "string",
           "enum": [
             "reserve_factor"

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FeeModelV1 {
-    /// Existing behavior: treasury share = borrower_rate * utilization * reserve_factor.
+    /// Default behavior: treasury share = borrower_rate * utilization * reserve_factor.
     #[default]
     ReserveFactor,
     /// Flat spread behavior: treasury share = flat_fee_apr * utilization.

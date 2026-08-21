@@ -391,13 +391,13 @@ Optional: **commit_market_id** can be set at instantiate (e.g. `"commit_market_i
 
 `pool_v2` supports two protocol-fee modes inside `rate_params`:
 
-- `fm: "reserve_factor"` (legacy): lender rate uses `rf`; set `ff` to `"0"`.
-- `fm: "flat_borrow_spread"` (new): protocol takes fixed annual spread `ff` from borrower APR.
+- `fm: "reserve_factor"`: lender rate uses `rf`; set `ff` to `"0"`.
+- `fm: "flat_borrow_spread"`: protocol takes fixed annual spread `ff` from borrower APR; set `rf` to `"0"`.
 
 Validation rules:
 
 - In `reserve_factor` mode, `ff` must be zero.
-- In `flat_borrow_spread` mode, `ff <= minr` (prevents negative lender rate at low utilization).
+- In `flat_borrow_spread` mode, `rf` must be zero and `ff <= minr` (prevents negative lender rate at low utilization).
 
 Example `rate_params` for flat spread mode:
 
@@ -407,7 +407,7 @@ Example `rate_params` for flat spread mode:
   "minr": "0.0325",
   "maxr": "0.20",
   "kink": "0.90",
-  "rf": "0.005",
+  "rf": "0",
   "fm": "flat_borrow_spread",
   "ff": "0.005",
   "spy": 31536000
@@ -628,7 +628,7 @@ provenanced query wasm contract-state smart $POOL '{"get_state":{}}' --chain-id 
 
 ```bash
 # Switch to flat spread mode (50 bps annual spread off borrower APR)
-provenanced tx wasm execute $POOL '{"update_rate_params":{"rate_params":{"tr":"0.09","minr":"0.0325","maxr":"0.20","kink":"0.90","rf":"0.005","fm":"flat_borrow_spread","ff":"0.005","spy":31536000}}}' \
+provenanced tx wasm execute $POOL '{"update_rate_params":{"rate_params":{"tr":"0.09","minr":"0.0325","maxr":"0.20","kink":"0.90","rf":"0","fm":"flat_borrow_spread","ff":"0.005","spy":31536000}}}' \
   --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
 
 # Switch back to reserve-factor mode (ff must be zero)
