@@ -28,6 +28,8 @@ pub struct RateParamsV1 {
     #[serde(rename = "rf")]
     pub reserve_factor: Decimal256,
     /// Fee mode: reserve-factor split (default) or flat spread from borrower APR.
+    /// The unused fee field for the inactive mode must be zero so a later mode switch
+    /// cannot revive a stale value from a full payload.
     #[serde(rename = "fm", default, skip_serializing_if = "is_default_fee_model")]
     pub fee_model: FeeModelV1,
     /// Flat protocol fee APR used when `fee_model = flat_borrow_spread`.
@@ -70,6 +72,12 @@ impl RateParamsV1 {
                     self.flat_fee_apr <= self.min_rate,
                     illegal_argument(
                         "rate_params: flat_fee_apr must be <= min_rate for flat_borrow_spread mode"
+                    )
+                );
+                ensure!(
+                    self.reserve_factor.is_zero(),
+                    illegal_argument(
+                        "rate_params: reserve_factor must be zero when fee_model is flat_borrow_spread"
                     )
                 );
             }

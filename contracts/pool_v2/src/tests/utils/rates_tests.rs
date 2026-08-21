@@ -146,6 +146,7 @@ fn lender_rate_flat_spread_mode_matches_sheet_identity() {
     let mut params = spreadsheet_rate_params();
     params.fee_model = FeeModelV1::FlatBorrowSpread;
     params.flat_fee_apr = Decimal256::from_str("0.005").unwrap();
+    params.reserve_factor = Decimal256::zero();
     let u = Decimal256::from_str("0.95").unwrap();
     let borrower_rate = borrower_rate_from_utilization(&params, u).unwrap();
     let lender_rate = lender_rate_from_utilization(&params, u, borrower_rate).unwrap();
@@ -164,6 +165,7 @@ fn rate_params_flat_spread_rejects_fee_above_min_rate() {
     let mut params = spreadsheet_rate_params();
     params.fee_model = FeeModelV1::FlatBorrowSpread;
     params.flat_fee_apr = Decimal256::from_str("0.04").unwrap();
+    params.reserve_factor = Decimal256::zero();
     let err = params.validate().unwrap_err();
     match err {
         ContractError::IllegalArgumentError { message } => {
@@ -184,6 +186,21 @@ fn rate_params_reserve_factor_rejects_non_zero_flat_fee() {
         ContractError::IllegalArgumentError { message } => {
             assert!(message.contains("flat_fee_apr"));
             assert!(message.contains("reserve_factor"));
+        }
+        _ => panic!("expected IllegalArgumentError"),
+    }
+}
+
+#[test]
+fn rate_params_flat_spread_rejects_non_zero_reserve_factor() {
+    let mut params = spreadsheet_rate_params();
+    params.fee_model = FeeModelV1::FlatBorrowSpread;
+    params.flat_fee_apr = Decimal256::from_str("0.005").unwrap();
+    let err = params.validate().unwrap_err();
+    match err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("reserve_factor"));
+            assert!(message.contains("flat_borrow_spread"));
         }
         _ => panic!("expected IllegalArgumentError"),
     }

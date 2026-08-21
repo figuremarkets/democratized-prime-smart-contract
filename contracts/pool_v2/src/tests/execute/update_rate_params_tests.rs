@@ -359,7 +359,7 @@ fn update_rate_params_succeeds_flat_borrow_spread_mode() {
         min_rate: Decimal256::from_str("0.04").unwrap(),
         max_rate: Decimal256::from_str("0.22").unwrap(),
         kink_utilization: Decimal256::from_str("0.85").unwrap(),
-        reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        reserve_factor: Decimal256::zero(),
         fee_model: FeeModelV1::FlatBorrowSpread,
         flat_fee_apr: Decimal256::from_str("0.005").unwrap(),
         seconds_per_year: 31_536_000,
@@ -419,6 +419,39 @@ fn update_rate_params_fails_reserve_factor_with_non_zero_flat_fee() {
         ContractError::IllegalArgumentError { message } => {
             assert!(message.contains("flat_fee_apr"));
             assert!(message.contains("reserve_factor"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn update_rate_params_fails_flat_spread_with_non_zero_reserve_factor() {
+    let (mut deps, env) = setup_instantiated();
+    let invalid_params = RateParamsV1 {
+        target_rate: Decimal256::from_str("0.10").unwrap(),
+        min_rate: Decimal256::from_str("0.04").unwrap(),
+        max_rate: Decimal256::from_str("0.22").unwrap(),
+        kink_utilization: Decimal256::from_str("0.85").unwrap(),
+        reserve_factor: Decimal256::from_str("0.01").unwrap(),
+        fee_model: FeeModelV1::FlatBorrowSpread,
+        flat_fee_apr: Decimal256::from_str("0.005").unwrap(),
+        seconds_per_year: 31_536_000,
+    };
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateRateParams {
+            rate_params: invalid_params,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("reserve_factor"));
+            assert!(message.contains("flat_borrow_spread"));
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }

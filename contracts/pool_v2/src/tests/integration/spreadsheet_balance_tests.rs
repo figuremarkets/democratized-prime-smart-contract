@@ -78,6 +78,7 @@ fn spreadsheet_rate_params_flat_spread() -> RateParamsV1 {
     let mut p = spreadsheet_rate_params();
     p.fee_model = FeeModelV1::FlatBorrowSpread;
     p.flat_fee_apr = Decimal256::from_str("0.005").unwrap();
+    p.reserve_factor = Decimal256::zero();
     p
 }
 

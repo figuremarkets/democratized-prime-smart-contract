@@ -801,7 +801,7 @@
           ]
         },
         "fm": {
-          "description": "Fee mode: reserve-factor split (default) or flat spread from borrower APR.",
+          "description": "Fee mode: reserve-factor split (default) or flat spread from borrower APR. The unused fee field for the inactive mode must be zero so a later mode switch cannot revive a stale value from a full payload.",
           "allOf": [
             {
               "$ref": "#/definitions/FeeModelV1"
