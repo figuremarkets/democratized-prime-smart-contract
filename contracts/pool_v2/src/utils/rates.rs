@@ -19,7 +19,7 @@
 //!   so withdrawable/debt is slightly under the true value; dust stays in the pool.
 
 use crate::model::error::{illegal_state, ContractError};
-use crate::model::{RateParamsV1, ReserveStateV1};
+use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
 use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
 use cosmwasm_std::{ensure, Decimal256, Env, Storage, Timestamp, Uint128, Uint256};
 use result_extensions::ResultExtensions;
@@ -59,15 +59,25 @@ pub fn borrower_rate_from_utilization(
     }
 }
 
-/// Lender APR: borrower_rate * utilization * (1 - reserve_factor).
+/// Lender APR under configured fee model.
+/// - Reserve factor mode: borrower_rate * utilization * (1 - reserve_factor)
+/// - Flat spread mode: (borrower_rate - flat_fee_apr) * utilization
 pub fn lender_rate_from_utilization(
     params: &RateParamsV1,
     utilization: Decimal256,
     borrower_rate: Decimal256,
 ) -> Result<Decimal256, ContractError> {
-    let one = Decimal256::one();
-    let lender_mult = utilization.checked_mul(one.checked_sub(params.reserve_factor)?)?;
-    borrower_rate.checked_mul(lender_mult).map_err(Into::into)
+    match params.fee_model {
+        FeeModelV1::ReserveFactor => {
+            let one = Decimal256::one();
+            let lender_mult = utilization.checked_mul(one.checked_sub(params.reserve_factor)?)?;
+            borrower_rate.checked_mul(lender_mult).map_err(Into::into)
+        }
+        FeeModelV1::FlatBorrowSpread => borrower_rate
+            .checked_sub(params.flat_fee_apr)?
+            .checked_mul(utilization)
+            .map_err(Into::into),
+    }
 }
 
 /// Time elapsed in seconds (cap at 0 for past timestamps).
