@@ -948,12 +948,10 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .expect("effective reserve before liquidate");
     let l = eff.total_liquidity().unwrap();
-    let li0 = eff.liquidity_index;
     let bad_debt_amt = 50u128;
     let d = Decimal256::from_ratio(Uint128::from(bad_debt_amt), Uint128::one());
-    let exp_liquidity_index = li0
-        .checked_mul(l.checked_sub(d).unwrap().checked_div(l).unwrap())
-        .unwrap();
+    let scaled = Decimal256::from_ratio(Uint128::from(eff.total_scaled_liquidity), Uint128::one());
+    let exp_liquidity_index = l.checked_sub(d).unwrap().checked_div(scaled).unwrap();
 
     let res = execute(
         deps.as_mut(),

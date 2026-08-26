@@ -118,10 +118,12 @@ fn socialize_deficit_haircuts_index_and_reduces_deficit() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .expect("effective reserve");
     let l = eff_pre.total_liquidity().expect("total_liquidity");
-    let li_before = eff_pre.liquidity_index;
     let d = Decimal256::from_ratio(Uint128::new(500_000), Uint128::one());
-    let factor = l.checked_sub(d).unwrap().checked_div(l).unwrap();
-    let exp_index = li_before.checked_mul(factor).unwrap();
+    let scaled = Decimal256::from_ratio(
+        Uint128::from(eff_pre.total_scaled_liquidity),
+        Uint128::one(),
+    );
+    let exp_index = l.checked_sub(d).unwrap().checked_div(scaled).unwrap();
 
     let res = execute(
         deps.as_mut(),
@@ -163,11 +165,12 @@ fn socialize_deficit_partial_haircut_leaves_deficit() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .expect("effective reserve");
     let l = eff_pre.total_liquidity().expect("total_liquidity");
-    let li_before = eff_pre.liquidity_index;
     let d = Decimal256::from_ratio(Uint128::new(400_000), Uint128::one());
-    let exp_index = li_before
-        .checked_mul(l.checked_sub(d).unwrap().checked_div(l).unwrap())
-        .unwrap();
+    let scaled = Decimal256::from_ratio(
+        Uint128::from(eff_pre.total_scaled_liquidity),
+        Uint128::one(),
+    );
+    let exp_index = l.checked_sub(d).unwrap().checked_div(scaled).unwrap();
 
     execute(
         deps.as_mut(),
@@ -204,10 +207,12 @@ fn socialize_deficit_caps_max_amount_at_remaining_deficit() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .expect("effective reserve");
     let l = eff_pre.total_liquidity().expect("total_liquidity");
-    let li_before = eff_pre.liquidity_index;
     let d = Decimal256::from_ratio(Uint128::new(500_000), Uint128::one());
-    let factor = l.checked_sub(d).unwrap().checked_div(l).unwrap();
-    let exp_index = li_before.checked_mul(factor).unwrap();
+    let scaled = Decimal256::from_ratio(
+        Uint128::from(eff_pre.total_scaled_liquidity),
+        Uint128::one(),
+    );
+    let exp_index = l.checked_sub(d).unwrap().checked_div(scaled).unwrap();
 
     let res = execute(
         deps.as_mut(),
@@ -255,4 +260,61 @@ fn socialize_deficit_succeeds_when_frozen() {
         },
     )
     .expect("socialize under frozen");
+}
+
+#[test]
+fn socialize_deficit_near_total_loss_rejects_zero_index_then_accepts_reduced_amount() {
+    let (mut deps, env) = setup_instantiated_contract();
+    let scaled = 1_000_000_000_000_000_001u128; // 1e18 + 1
+    let mut r = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    r.total_scaled_liquidity = scaled;
+    r.liquidity_index = Decimal256::one();
+    r.deficit_underlying = scaled - 1;
+    set_reserve_state_v1(deps.as_mut().storage, &r).unwrap();
+    let index_before = r.liquidity_index;
+
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SocializeDeficit {
+            max_amount: Uint128::new(scaled - 1),
+        },
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalStateError { message } => {
+            assert!(
+                message.contains("truncate liquidity_index to zero"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalStateError, got {:?}", err),
+    }
+    let r = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(r.liquidity_index, index_before);
+    assert_eq!(r.deficit_underlying, scaled - 1);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::SocializeDeficit {
+            max_amount: Uint128::new(scaled - 2),
+        },
+    )
+    .expect("reduced socialization must succeed with non-zero index");
+
+    let r = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert!(!r.liquidity_index.is_zero());
+    assert_eq!(r.deficit_underlying, 1);
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend must still work after near-total haircut");
 }

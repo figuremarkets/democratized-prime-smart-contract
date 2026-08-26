@@ -302,15 +302,15 @@ pub fn reserve_totals_and_cash_u128(
     Ok((total_liquidity_u128, total_borrow_u128, cash))
 }
 
-/// Pro-rata supplier loss: multiply `liquidity_index` by **`(L − loss) / L`** where **`L`** is
-/// [`ReserveStateV1::total_liquidity`] (**exact** `total_scaled_liquidity × liquidity_index` in
-/// [`Decimal256`]) and **`loss`** is the integer underlying amount in the same units (as
-/// [`Decimal256::from_ratio`]). **`total_scaled_liquidity` unchanged.**
+/// Pro-rata supplier loss: set `liquidity_index` to **`(L − loss) / total_scaled_liquidity`**
+/// where **`L`** is [`ReserveStateV1::total_liquidity`] (**exact** `total_scaled_liquidity ×
+/// liquidity_index` in [`Decimal256`]) and **`loss`** is the integer underlying amount in the
+/// same units (as [`Decimal256::from_ratio`]). **`total_scaled_liquidity` unchanged.**
+/// Errors if `loss >= L` or the floored new index is zero.
 ///
-/// **Rounding:** [`Decimal256::checked_div`] truncates the factor toward zero, so the updated
-/// index is never rounded **up** versus the exact \((L-\mathrm{loss})/L\); suppliers’ aggregate
-/// underlying claim ends up micro-conservative (slightly under the exact split), which avoids
-/// over-promising liquidity after the loss.
+/// **Rounding:** [`Decimal256::checked_div`] truncates toward zero, so the updated
+/// index is never rounded **up**; suppliers’ aggregate claim ends up micro-conservative,
+/// which avoids over-promising liquidity after the loss.
 ///
 /// When folding booked bad debt, caller must also subtract the same **`loss`** from
 /// **`deficit_underlying`** in the same transaction (see **`SocializeDeficit`** execute).
@@ -333,8 +333,19 @@ pub fn apply_pro_rata_liquidity_index_haircut(
             "bad debt loss meets or exceeds total_liquidity; cannot apply index-only haircut"
         )
     );
-    let factor = l.checked_sub(d)?.checked_div(l)?;
-    reserve.liquidity_index = reserve.liquidity_index.checked_mul(factor)?;
+    let scaled = Decimal256::from_atomics(Uint256::from(reserve.total_scaled_liquidity), 0)
+        .unwrap_or(Decimal256::zero());
+    ensure!(
+        !scaled.is_zero(),
+        illegal_state("cannot apply liquidity index haircut: total_scaled_liquidity is zero")
+    );
+    let remaining = l.checked_sub(d)?;
+    let new_index = remaining.checked_div(scaled)?;
+    ensure!(
+        !new_index.is_zero(),
+        illegal_state("liquidity index haircut would truncate liquidity_index to zero")
+    );
+    reserve.liquidity_index = new_index;
     Ok(())
 }
 
