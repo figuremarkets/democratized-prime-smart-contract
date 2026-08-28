@@ -3,7 +3,8 @@ use crate::execute::{
     add_collateral, borrow, eliminate_deficit, execute_withdraw, lend, liquidate, receive,
     remove_collateral, repay, set_borrower_required_attrs, set_lender_require_commit_on_exit,
     set_lender_required_attrs, set_operational_state, socialize_deficit, update_contract_config,
-    update_rate_params, update_supported_collateral, withdraw_reserve, UpdateContractConfigParams,
+    update_rate_params, update_supported_collateral, withdraw_reserve, write_off,
+    UpdateContractConfigParams,
 };
 use crate::instantiate::{instantiate_contract, reply as reply_handler};
 use crate::model::error::{illegal_argument, illegal_state, ContractError, QueryError};
@@ -51,7 +52,7 @@ pub fn execute(
     let contract = get_contract_state_v1(deps.storage)?;
     // When Paused (e.g. emergency/bug): full freeze. Only custodian config changes
     // are allowed, with the exception of UpdateOwnership (owner only); no funds/collateral
-    // in or out. Liquidate is blocked; WithdrawReserve is also blocked (it sends funds).
+    // in or out. Liquidate and WriteOff are blocked; WithdrawReserve is also blocked (it sends funds).
     let allowed_when_paused = matches!(
         &msg,
         ExecuteMsg::UpdateSupportedCollateral { .. }
@@ -89,6 +90,7 @@ pub fn execute(
             borrower,
             collateral_to_seize,
         } => liquidate(deps, env, info, borrower, &collateral_to_seize),
+        ExecuteMsg::WriteOff { borrower } => write_off(deps, env, info, borrower),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,

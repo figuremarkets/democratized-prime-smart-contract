@@ -18,15 +18,15 @@ use result_extensions::ResultExtensions;
 /// How a missing or zero collateral price is treated when valuing a position.
 ///
 /// Every production caller today passes [`ZeroPricePolicy::TreatAsWorthless`] (Borrow,
-/// RemoveCollateral, Liquidate, queries). [`ZeroPricePolicy::Reject`] has no execute
-/// or query call site; it is kept so write_off (`sc-542885`) or a later path can fail
-/// closed without reintroducing the branch.
+/// RemoveCollateral, Liquidate, WriteOff, queries). [`ZeroPricePolicy::Reject`] has no
+/// execute or query call site; it is kept so a later path can fail closed without
+/// reintroducing the branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZeroPricePolicy {
     /// Error on a zero or absent collateral price. Nothing currently selects this.
     Reject,
-    /// Value the asset at $0 and give it no LTV credit, so a dead feed does not freeze
-    /// the position. Write_off (`sc-542885`) is expected to pass this as well.
+    /// Value the asset at $0 and give it no LTV / dust-gate credit, so a dead feed does
+    /// not freeze the position.
     TreatAsWorthless,
 }
 
@@ -65,7 +65,9 @@ pub fn get_health_from_ltv(
     BorrowerHealthV1::Healthy.to_ok()
 }
 
-/// LTV = debt_value_usd / collateral_value_usd. Errors if no collateral but debt > 0.
+/// LTV = debt_value_usd / collateral_value_usd.
+/// Positive debt with zero collateral USD is treated as LTV = 1 (always Liquidatable;
+/// `liquidation_rate` is capped at 1). That stands in for unbounded LTV, not a precise ratio.
 pub fn calculate_ltv(
     contract_state: &ContractStateV1,
     supported_assets: &[CollateralAssetV1],
@@ -90,19 +92,47 @@ pub fn calculate_ltv(
         return Decimal256::zero().to_ok();
     }
     if total_collateral_value_usd.is_zero() {
-        // TODO(sc-542885): return Decimal256::one() so an all-unpriceable bag with debt is
-        // Liquidatable (needed by write_off under TreatAsWorthless). Borrow/RemoveCollateral
-        // fail closed either way.
-        return illegal_argument(format!(
-            "No collateral for loans [debt value {}]",
-            borrow_balance_usd
-        ))
-        .to_err();
+        // Unbounded LTV (dust or all-unpriceable bag with debt). 1 is always >=
+        // liquidation_rate (config enforces rate <= 1). Borrow/RemoveCollateral fail
+        // closed on the resulting Liquidatable health.
+        return Decimal256::one().to_ok();
     }
-    // Guard above ensures no divide-by-zero (empty collateral amounts).
     borrow_balance_usd
         .checked_div(total_collateral_value_usd)
         .map_err(ContractError::from)
+}
+
+/// Market value of collateral (`display_price_usd × amount / 10^precision`, **no** haircut).
+/// Used by WriteOff dust gating. Missing or zero prices follow [`ZeroPricePolicy`].
+pub fn calculate_total_collateral_market_value_usd(
+    collateral: &BorrowerCollateralV1,
+    prices: &PriceMapResponse,
+    zero_price_policy: ZeroPricePolicy,
+) -> Result<Decimal256, ContractError> {
+    let mut total = Decimal256::zero();
+    for (asset_id, amount) in collateral.amounts.iter() {
+        let price = match prices.get(asset_id) {
+            Some(p) => p,
+            None => match zero_price_policy {
+                ZeroPricePolicy::Reject => {
+                    return Err(not_found(format!("Price of asset: {}", asset_id)));
+                }
+                ZeroPricePolicy::TreatAsWorthless => continue,
+            },
+        };
+        if price.is_zero_price() {
+            match zero_price_policy {
+                ZeroPricePolicy::Reject => {
+                    return Err(illegal_argument(format!(
+                        "Collateral price is zero: {asset_id}"
+                    )));
+                }
+                ZeroPricePolicy::TreatAsWorthless => continue,
+            }
+        }
+        total += price.value_usd(*amount)?;
+    }
+    total.to_ok()
 }
 
 pub fn calculate_total_collateral_value_usd(

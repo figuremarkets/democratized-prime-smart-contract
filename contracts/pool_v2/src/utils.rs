@@ -8,8 +8,9 @@ pub mod response_ext;
 pub mod validation;
 
 pub use health::{
-    calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_value_usd,
-    get_borrower_health, get_health_from_ltv, validate_borrower_is_healthy, ZeroPricePolicy,
+    calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_market_value_usd,
+    calculate_total_collateral_value_usd, get_borrower_health, get_health_from_ltv,
+    validate_borrower_is_healthy, ZeroPricePolicy,
 };
 pub use math::{format_as_percent_string, uint128_to_decimal256};
 pub use permission::{assert_custodian, assert_owner_or_custodian};

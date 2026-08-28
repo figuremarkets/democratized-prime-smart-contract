@@ -62,14 +62,20 @@ pub enum ExecuteMsg {
         to_remove: BTreeMap<String, Uint128>,
     },
 
-    /// Liquidate a borrower (contract owner only). Liquidator repays debt via funds (one coin, lending
-    /// denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be
-    /// in [100%, liquidation_bonus_rate] of the amount repaid.
+    /// Liquidate a borrower (contract owner only). Liquidator repays debt via funds (one coin,
+    /// lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value
+    /// must be in [100%, liquidation_bonus_rate] of the amount repaid. If remaining collateral is
+    /// worth less than one lending unit, use **WriteOff**.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.
         collateral_to_seize: BTreeMap<String, Uint128>,
     },
+
+    /// Owner only: write off residual scaled debt when **priced** collateral market value is
+    /// below one lending base unit. Unpriceable balances are not seized (they stay on the
+    /// borrower). Optional lending funds are applied as repay first.
+    WriteOff { borrower: String },
 
     /// Update supported collateral assets (contract owner).
     UpdateSupportedCollateral {

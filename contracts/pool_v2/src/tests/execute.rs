@@ -18,3 +18,4 @@ mod update_rate_params_tests;
 mod update_supported_collateral_tests;
 mod withdraw_reserve_tests;
 mod withdraw_tests;
+mod write_off_tests;

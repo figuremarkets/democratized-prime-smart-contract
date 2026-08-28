@@ -57,7 +57,7 @@ pub struct InstantiateMsg {
     /// When set, withdraw with commit_funds: true will emit MsgCommitFundsRequest to this Provenance exchange market. None = no on-chain commit.
     #[serde(default)]
     pub commit_market_id: Option<u32>,
-    /// How bad-debt liquidation affects suppliers (see [`crate::model::BadDebtLossAllocation`]). Default: defer to `deficit_underlying`.
+    /// How bad-debt liquidation or WriteOff affects suppliers (see [`crate::model::BadDebtLossAllocation`]). Default: defer to `deficit_underlying`.
     #[serde(default)]
     pub bad_debt_loss_allocation: BadDebtLossAllocation,
     /// The account serving as the custodian of contract operations.

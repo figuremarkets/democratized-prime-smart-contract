@@ -332,12 +332,12 @@ fn ltv_zero_debt_zero_collateral() {
 }
 
 #[test]
-fn ltv_no_collateral_with_debt_errors() {
+fn ltv_no_collateral_with_debt_is_sentinel_one() {
     let state = contract_state("0.80", "0.90");
     let collateral = BorrowerCollateralV1::default();
     let mut prices = PriceMapResponse::new();
     prices.insert("lend".to_string(), price_entry("1.0"));
-    let err = calculate_ltv(
+    let ltv = calculate_ltv(
         &state,
         &state.supported_collateral_assets,
         &prices,
@@ -345,13 +345,12 @@ fn ltv_no_collateral_with_debt_errors() {
         Uint128::new(100),
         ZeroPricePolicy::TreatAsWorthless,
     )
-    .unwrap_err();
-    match &err {
-        ContractError::IllegalArgumentError { message } => {
-            assert!(message.contains("No collateral for loans"));
-        }
-        _ => panic!("expected IllegalArgumentError, got {:?}", err),
-    }
+    .unwrap();
+    assert_eq!(ltv, Decimal256::one());
+    assert_eq!(
+        get_health_from_ltv(&state, ltv).unwrap(),
+        BorrowerHealthV1::Liquidatable
+    );
 }
 
 #[test]

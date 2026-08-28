@@ -103,7 +103,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower (contract owner only). Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid.",
+      "description": "Liquidate a borrower (contract owner only). Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid. If remaining collateral is worth less than one lending unit, use **WriteOff**.",
       "type": "object",
       "required": [
         "liquidate"
@@ -123,6 +123,28 @@
               "description": "Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.",
               "type": "object",
               "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Owner only: write off residual scaled debt when **priced** collateral market value is below one lending base unit. Unpriceable balances are not seized (they stay on the borrower). Optional lending funds are applied as repay first.",
+      "type": "object",
+      "required": [
+        "write_off"
+      ],
+      "properties": {
+        "write_off": {
+          "type": "object",
+          "required": [
+            "borrower"
+          ],
+          "properties": {
+            "borrower": {
+              "type": "string"
             }
           },
           "additionalProperties": false
@@ -782,7 +804,7 @@
           ]
         },
         {
-          "description": "Full freeze: only owner config allowed (including [`crate::msg::ExecuteMsg::UpdateOwnership`]). [`crate::msg::ExecuteMsg::Liquidate`], [`crate::msg::ExecuteMsg::Repay`], [`crate::msg::ExecuteMsg::Withdraw`], [`crate::msg::ExecuteMsg::WithdrawReserve`], [`crate::msg::ExecuteMsg::AddCollateral`], and [`crate::msg::ExecuteMsg::RemoveCollateral`] are blocked — no funds/collateral in or out, no liquidations.",
+          "description": "Full freeze: only owner config allowed (including [`crate::msg::ExecuteMsg::UpdateOwnership`]). [`crate::msg::ExecuteMsg::Liquidate`], [`crate::msg::ExecuteMsg::WriteOff`], [`crate::msg::ExecuteMsg::Repay`], [`crate::msg::ExecuteMsg::Withdraw`], [`crate::msg::ExecuteMsg::WithdrawReserve`], [`crate::msg::ExecuteMsg::AddCollateral`], and [`crate::msg::ExecuteMsg::RemoveCollateral`] are blocked — no funds/collateral in or out, no liquidations or write-offs.",
           "type": "string",
           "enum": [
             "paused"

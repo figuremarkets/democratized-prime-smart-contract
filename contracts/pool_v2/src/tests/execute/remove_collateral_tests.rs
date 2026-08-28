@@ -541,7 +541,7 @@ fn remove_collateral_fails_remove_all_with_debt() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(
-                message.contains("No collateral for loans"),
+                message.contains("Loan-to-value") || message.contains("threshold"),
                 "message: {}",
                 message
             );

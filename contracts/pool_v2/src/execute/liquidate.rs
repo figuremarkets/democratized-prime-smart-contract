@@ -9,7 +9,8 @@
 //! `max_liquidation_staleness_seconds`, is valued at zero for LTV/min-repay and cannot
 //! be seized. A **stale** stored price still within that bound is used as last-known (not fatal)
 //! so liquidations are not frozen by a paused feed. The lending denom must have a stored price
-//! within the same bound.
+//! within the same bound. If remaining collateral is worth less than one lending unit, use
+//! [`crate::execute::write_off`] instead.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → liquidatable →
 //! minimum repay (USD → lending units) → sent funds and scaled repay → collateral value band and

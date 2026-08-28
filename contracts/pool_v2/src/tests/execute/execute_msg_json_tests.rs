@@ -125,6 +125,16 @@ fn liquidate_json_deserializes() {
 }
 
 #[test]
+fn write_off_json_deserializes() {
+    assert_json_deserializes(
+        r#"{"write_off":{"borrower":"tp1borrowerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}"#,
+        ExecuteMsg::WriteOff {
+            borrower: "tp1borrowerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(),
+        },
+    );
+}
+
+#[test]
 fn update_supported_collateral_json_deserializes() {
     assert_json_deserializes(
         r#"{"update_supported_collateral":{"to_update":[{"id":"asset.one","h":"0.8"}],"to_remove":["old.asset"]}}"#,

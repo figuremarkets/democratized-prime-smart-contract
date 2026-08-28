@@ -22,7 +22,7 @@
   ],
   "properties": {
     "bad_debt_loss_allocation": {
-      "description": "How bad-debt liquidation affects suppliers (see [`crate::model::BadDebtLossAllocation`]). Default: defer to `deficit_underlying`.",
+      "description": "How bad-debt liquidation or WriteOff affects suppliers (see [`crate::model::BadDebtLossAllocation`]). Default: defer to `deficit_underlying`.",
       "default": "deferred_to_deficit",
       "allOf": [
         {

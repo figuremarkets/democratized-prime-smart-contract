@@ -61,10 +61,10 @@ pub enum OperationalState {
     Active,
     /// New lend and borrow disabled; withdraw, repay, collateral, transfer and owner-only actions allowed.
     Frozen,
-    /// Full freeze: only owner config allowed (including [`crate::msg::ExecuteMsg::UpdateOwnership`]). [`crate::msg::ExecuteMsg::Liquidate`], [`crate::msg::ExecuteMsg::Repay`],
+    /// Full freeze: only owner config allowed (including [`crate::msg::ExecuteMsg::UpdateOwnership`]). [`crate::msg::ExecuteMsg::Liquidate`], [`crate::msg::ExecuteMsg::WriteOff`], [`crate::msg::ExecuteMsg::Repay`],
     /// [`crate::msg::ExecuteMsg::Withdraw`], [`crate::msg::ExecuteMsg::WithdrawReserve`],
     /// [`crate::msg::ExecuteMsg::AddCollateral`], and [`crate::msg::ExecuteMsg::RemoveCollateral`] are blocked —
-    /// no funds/collateral in or out, no liquidations.
+    /// no funds/collateral in or out, no liquidations or write-offs.
     Paused,
 }
 

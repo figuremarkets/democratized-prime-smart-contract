@@ -13,6 +13,9 @@ pub const ATTRIBUTE_BORROWER: &str = "borrower";
 pub const ATTRIBUTE_BORROWER_REQUIRED_ATTRS_JSON: &str = "borrower_required_attrs_json";
 /// Attribute key for collateral; value is JSON object (denom -> amount string). Uses `_json` suffix for JSON payloads.
 pub const ATTRIBUTE_COLLATERAL_JSON: &str = "collateral_json";
+/// JSON array of collateral denoms classified unpriceable on WriteOff (missing, zero, or
+/// last-known beyond `max_liquidation_staleness_seconds`). Sorted. Empty array if none.
+pub const ATTRIBUTE_UNPRICEABLE_JSON: &str = "unpriceable_json";
 pub const ATTRIBUTE_CONTRACT_STATE_JSON: &str = "contract_state_json";
 /// Full `RateParamsV1` JSON on instantiate and `UpdateRateParams`. Uses `_json` suffix for JSON payloads.
 pub const ATTRIBUTE_RATE_PARAMS_JSON: &str = "rate_params_json";

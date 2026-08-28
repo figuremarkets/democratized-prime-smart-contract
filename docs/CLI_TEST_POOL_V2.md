@@ -766,7 +766,7 @@ provenanced tx wasm execute $POOL '{"set_operational_state":{"state":"active"}}'
   --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
 ```
 
-**4.14 Optional: Liquidate** (admin repays debt and receives collateral; only when position is liquidatable). This step does **not** work in the default doc flow because:
+**4.14 Optional: Liquidate** (repay debt and receive collateral; **contract owner** / **admin** in this playbook; only when the position is liquidatable). If remaining collateral is worth less than one lending unit, the owner uses **write_off** instead of liquidate. This step does **not** work in the default doc flow because:
 
 1. **Liquidator must have YLDS** — The liquidator (admin) sends `--amount ...$LENDING_DENOM` to repay the borrower's debt; admin has no YLDS unless you mint or transfer some to them.
 2. **Borrower must be liquidatable** — Liquidation is only allowed when the borrower's LTV ≥ pool `liquidation_rate` (e.g. 90%). After 4.5–4.7 (AddCollateral, Borrow, Repay), LTV is well below 90%, so the position is healthy.

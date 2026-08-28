@@ -17,6 +17,7 @@ pub mod update_rate_params;
 pub mod update_supported_collateral;
 pub mod withdraw;
 pub mod withdraw_reserve;
+pub mod write_off;
 
 pub use add_collateral::add_collateral;
 pub use borrow::borrow;
@@ -37,3 +38,4 @@ pub use update_rate_params::update_rate_params;
 pub use update_supported_collateral::update_supported_collateral;
 pub use withdraw::{execute_withdraw, execute_withdraw_cw20};
 pub use withdraw_reserve::withdraw_reserve;
+pub use write_off::write_off;
