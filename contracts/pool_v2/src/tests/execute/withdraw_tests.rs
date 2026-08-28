@@ -120,11 +120,7 @@ fn setup_with_liquidity() -> (
 }
 
 fn price_entry(price: &str) -> AssetPriceResponseV1 {
-    AssetPriceResponseV1 {
-        price_usd: Decimal256::from_str(price).unwrap(),
-        as_of_epoch_second: 0,
-        expiration_epoch_seconds: u64::MAX,
-    }
+    AssetPriceResponseV1::new(Decimal256::from_str(price).unwrap(), 0, u64::MAX)
 }
 
 fn set_oracle_prices(

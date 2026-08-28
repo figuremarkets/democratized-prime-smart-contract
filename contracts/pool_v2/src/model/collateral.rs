@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub struct CollateralAssetV1 {
     #[serde(rename = "id")]
     pub asset_id: String,
-    /// Discount for valuation: collateral value = price × amount × haircut. None = 100% (no discount; full value).
+    /// Discount for valuation: collateral value = display_price_usd × amount / 10^precision × haircut. None = 100% (no discount; full value).
     #[serde(rename = "h")]
     pub haircut: Option<Decimal256>,
 }

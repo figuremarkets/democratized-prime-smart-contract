@@ -120,7 +120,7 @@
               "type": "string"
             },
             "collateral_to_seize": {
-              "description": "Asset id -> amount to seize from the borrower. Market value (price × amount) must be in [100%, liquidation_bonus_rate] of amount repaid.",
+              "description": "Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.",
               "type": "object",
               "additionalProperties": false
             }
@@ -598,7 +598,7 @@
       ],
       "properties": {
         "h": {
-          "description": "Discount for valuation: collateral value = price × amount × haircut. None = 100% (no discount; full value).",
+          "description": "Discount for valuation: collateral value = display_price_usd × amount / 10^precision × haircut. None = 100% (no discount; full value).",
           "anyOf": [
             {
               "$ref": "#/definitions/Decimal256"

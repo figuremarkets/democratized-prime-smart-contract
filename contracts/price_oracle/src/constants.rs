@@ -1,3 +1,5 @@
+use cosmwasm_std::Decimal256;
+
 pub const CONTRACT_NAME: &str = "democratized_prime_price_oracle";
 pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -14,3 +16,7 @@ pub const TEN: &str = "10";
 
 /// The default price staleness threshold in seconds.
 pub const DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS: u32 = 30;
+
+/// Max asset-mapping precision: [`Decimal256`] fractional places. Higher values
+/// cannot be represented in the deprecated scaled `price_usd` response field.
+pub const MAX_ASSET_MAPPING_PRECISION: u32 = Decimal256::DECIMAL_PLACES;

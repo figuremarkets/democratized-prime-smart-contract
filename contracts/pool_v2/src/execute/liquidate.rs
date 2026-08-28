@@ -1,8 +1,9 @@
 //! # Liquidation (contract owner only)
 //!
 //! Liquidates a borrower whose LTV is at or above the liquidation rate. The liquidator (owner)
-//! repays debt and chooses which collateral to seize. The **market value** (price × amount, no
-//! haircut) of seized collateral must be 100% to `liquidation_bonus_rate` of the repay value
+//! repays debt and chooses which collateral to seize. The **market value**
+//! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
+//! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → liquidatable →
@@ -28,9 +29,9 @@ use crate::storage::{
 };
 use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_borrow_value_usd,
-    calculate_total_collateral_value_usd, decimal256_ceil_to_u128, get_asset_prices_for_borrower,
-    get_borrower_health, scaled_to_underlying_borrow, uint128_to_decimal256,
-    underlying_to_scaled_borrow, update_reserve_indexes, validate_single_coin_denom, WithRates,
+    calculate_total_collateral_value_usd, get_asset_prices_for_borrower, get_borrower_health,
+    scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
+    validate_single_coin_denom, WithRates,
 };
 use cosmwasm_std::{
     ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
@@ -161,18 +162,15 @@ pub fn liquidate(
                 "Price of lending denom is missing: {}",
                 contract.lending_denom.name
             ))
-        })?
-        .price_usd;
+        })?;
     ensure!(
-        !price_lending.is_zero(),
+        !price_lending.is_zero_price(),
         illegal_state("Lending denom price is zero")
     );
-    // Still step 4: guard above avoids divide-by-zero in checked_div(price_lending).
-    let min_repay_lending =
-        decimal256_ceil_to_u128(min_repay_value_usd.checked_div(price_lending)?)
-            .ok_or_else(|| illegal_state("Min repay amount overflow"))?;
+    // Still step 4: guard above avoids divide-by-zero in amount_from_usd.
+    let min_repay_lending = price_lending.amount_from_usd(min_repay_value_usd)?;
     // Clamp min repay to at least 1 base unit (min_repay_value_usd can be 0 when numerator saturates;
-    // decimal256_ceil_to_u128(0) returns 0).
+    // amount_from_usd(0) returns 0).
     let min_repay_lending = min_repay_lending.max(1);
 
     // ---------- 5. Attached lending funds; actual repay and scaled repay ----------
@@ -194,8 +192,7 @@ pub fn liquidate(
         .ok_or_else(|| illegal_state("scaled debt underflow"))?;
 
     // ---------- 6. Collateral to seize: non-empty map; per-asset support, balances; USD band vs repay ----------
-    let actual_repay_value_usd =
-        price_lending.checked_mul(uint128_to_decimal256(actual_repay_underlying))?;
+    let actual_repay_value_usd = price_lending.value_usd(actual_repay_underlying)?;
     let min_collateral_value_required = actual_repay_value_usd; // 100% of repay value
     let max_collateral_value_allowed = actual_repay_value_usd.checked_mul(bonus)?;
     ensure!(
@@ -209,8 +206,8 @@ pub fn liquidate(
         .map(|a| a.asset_id.as_str())
         .collect();
 
-    // Value each requested seizure at market price (price × amount). Band is on market value so the
-    // liquidation bonus cap applies to economic seize size (not haircutted collateral value).
+    // Value each requested seizure at market (display × amount / 10^precision). Band is on market
+    // value so the liquidation bonus cap applies to economic seize size (not haircutted collateral).
     let mut seized_value_usd = Decimal256::zero();
     for (asset_id, seize_amount) in collateral_to_seize {
         if seize_amount.is_zero() {
@@ -236,9 +233,8 @@ pub fn liquidate(
         );
         let price = asset_prices
             .get(asset_id)
-            .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))?
-            .price_usd;
-        let value = price.checked_mul(uint128_to_decimal256(seize_amount.u128()))?;
+            .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))?;
+        let value = price.value_usd(seize_amount.u128())?;
         seized_value_usd = seized_value_usd.checked_add(value)?;
     }
 

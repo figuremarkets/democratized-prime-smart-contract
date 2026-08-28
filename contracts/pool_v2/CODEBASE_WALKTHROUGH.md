@@ -106,7 +106,7 @@ Used in contract state and whenever we build coins to send or validate.
 
 **Purpose:** Defines **which assets can be used as collateral** and **per-borrower collateral balances**.
 
-- **`CollateralAssetV1`**: One supported collateral type: `asset_id` (e.g. marker denom) and optional `haircut` (discount for valuation, 0–100%).
+- **`CollateralAssetV1`**: One supported collateral type: `asset_id` (e.g. marker denom) and optional `haircut` (discount for valuation, 0–100%). Haircutted value = `display_price_usd × amount / 10^precision × haircut`.
 - **Supported collateral**: Stored on **`ContractStateV1`** as `supported_collateral_assets: Vec<CollateralAssetV1>` (asset_id and optional haircut). The contract owner can update via **UpdateSupportedCollateral**. The price oracle is also on `ContractStateV1` and used for all price queries.
 - **`BorrowerCollateralV1`**: Per-borrower: `amounts: HashMap<asset_id, u128>`. Stored **per borrower address**.
 
@@ -257,7 +257,7 @@ The user specifies a recipient and an amount in *underlying* (e.g. “1000 units
 The user sends one coin (repo token) and specifies only the recipient; the amount is taken from the funds. The contract validates recipient and lender attribute, then sends the full sent amount to the recipient. Use for “transfer all”: query scaled balance, then send TransferExact { recipient } with that much repo token in funds.
 
 **When collateral doesn't cover debt**
-A borrower's position has **LTV = debt_value / collateral_value** (collateral valued with haircuts). If debt grows (interest accrues) or collateral value falls (oracle prices drop), LTV rises. The contract does **not** automatically close or adjust the position. Instead:
+A borrower's position has **LTV = debt_value / collateral_value**. USD notionals are `display_price_usd × amount / 10^precision` from the oracle (not the deprecated scaled `price_usd` field). Collateral then applies haircuts. If debt grows (interest accrues) or collateral value falls (oracle prices drop), LTV rises. The contract does **not** automatically close or adjust the position. Instead:
 
 - **LTV ≤ margin_rate:** Healthy. The borrower can borrow more and remove collateral (subject to checks).
 - **LTV > margin_rate but < liquidation_rate:** Unhealthy; the borrower cannot borrow more or remove collateral until they repay or add collateral to bring LTV to at or below margin_rate.
@@ -268,7 +268,7 @@ Contract owner only. The contract accrues interest and loads the borrower's debt
 
 The contract computes the **minimum repay**: the repayment (in lending units) that would bring LTV back to exactly the margin rate, assuming we seize collateral whose value is between 100% and the liquidation-bonus rate (e.g. 102%) of that repay. This minimum is capped by the borrower's full debt and by total collateral value (so partial liquidation is possible). The contract owner sends lending denom in **funds** (one coin); actual repay = min(sent, debt), and sent must be ≥ minimum. Excess is refunded. There is no `amount` field in the message (same pattern as Repay).
 
-The contract owner also specifies *which* collateral to seize (denom and amount per asset). The **market value** of that collateral (price × amount; no haircut) must lie in the band: **≥ repay value** and **≤ repay value × liquidation_bonus**. So the liquidator receives collateral worth at least what they repaid, but not more than the bonus cap (profit is capped as intended).
+The contract owner also specifies *which* collateral to seize (denom and amount per asset). The **market value** of that collateral (`display_price_usd × amount / 10^precision`; no haircut) must lie in the band: **≥ repay value** and **≤ repay value × liquidation_bonus**. So the liquidator receives collateral worth at least what they repaid, but not more than the bonus cap (profit is capped as intended).
 
 The contract simulates collateral **after** the seizure. **Normal case:** some collateral remains; usual partial repay and debt update. **Bad-debt case:** no collateral would remain but debt would not be fully cleared—the borrower’s scaled debt is cleared, **total_scaled_borrow** drops by repay plus write-off, and reserve updates follow **`bad_debt_loss_allocation`** (deferred vs immediate; see Section 3). Response attributes include **`bad_debt_underlying`**, **`deficit_underlying`**, and **`bad_debt_loss_allocation`**. Collateral totals and borrower map are saved, seized coins go to the liquidator, and rate metadata is attached.
 

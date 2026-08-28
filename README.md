@@ -16,7 +16,7 @@ The code is here so **governance** participants and the **community** can **revi
 |-----------|------|------|
 | **Pool v2** | [`contracts/pool_v2/`](contracts/pool_v2/) | Lend, borrow, repay, collateral, liquidation, reserve accrual, optional Provenance **commit-on-exit** flows. Behavior: [CODEBASE_WALKTHROUGH.md](contracts/pool_v2/CODEBASE_WALKTHROUGH.md). |
 | **Repo token (CW20)** | [`contracts/repo_token_cw20/`](contracts/repo_token_cw20/) | Receipt token: scaled balances; when wired to the pool, queries expose **underlying** amounts using the pool’s liquidity index. |
-| **Price oracle** | [`contracts/price_oracle/`](contracts/price_oracle/) | Asset mappings and USD price data for pool risk and valuation. |
+| **Price oracle** | [`contracts/price_oracle/`](contracts/price_oracle/) | Asset mappings and USD prices. Use `display_price_usd` and `precision` (`display × amount / 10^precision`). Scaled `price_usd` is deprecated. |
 | **Shared library** | [`packages/lib/`](packages/lib/) | Common types (e.g. repo token `InstantiateMsg` and validation) used by more than one contract. |
 
 JSON **schemas** for each contract live under each contract’s `schema/` directory (regenerated via the `schema` example targets).

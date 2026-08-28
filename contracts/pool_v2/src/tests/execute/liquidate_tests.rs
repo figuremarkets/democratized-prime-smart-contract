@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 /// With debt 600 and collateral price 0.83 (haircutted value 664), min repay = 374 (formula: (D - margin*C)/(1 - bonus*margin)).
-/// Seized collateral is valued at market (price × amount). Band [100%, 102%] of repay → for repay 374 need market value in [374, 381.48];
+/// Seized collateral is valued at market (display_price_usd × amount / 10^precision). Band [100%, 102%] of repay → for repay 374 need market value in [374, 381.48];
 /// at price 0.83 that is ~451–460 units. Use 455 (market value 377.65).
 fn collateral_to_seize_success() -> BTreeMap<String, Uint128> {
     let mut m = BTreeMap::new();
@@ -109,11 +109,7 @@ fn instantiate_msg_full_haircut_collateral() -> InstantiateMsg {
 }
 
 fn price_entry(price: &str) -> AssetPriceResponseV1 {
-    AssetPriceResponseV1 {
-        price_usd: Decimal256::from_str(price).unwrap(),
-        as_of_epoch_second: 0,
-        expiration_epoch_seconds: u64::MAX,
-    }
+    AssetPriceResponseV1::new(Decimal256::from_str(price).unwrap(), 0, u64::MAX)
 }
 
 fn set_oracle_prices(

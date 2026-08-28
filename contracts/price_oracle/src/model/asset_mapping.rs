@@ -1,11 +1,10 @@
-use crate::constants::DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS;
+use crate::constants::{DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS, MAX_ASSET_MAPPING_PRECISION};
 use crate::model::{
     error::{illegal_argument, ContractError},
     PriceV1,
 };
 use crate::utils::scale_price;
 use cosmwasm_std::ensure;
-use democratized_prime_lib::common::constants::MAX_DECIMAL_PRECISION;
 use democratized_prime_lib::price_oracle::model::price::AssetPriceResponseV1;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -49,12 +48,12 @@ impl AssetMappingV1 {
             illegal_argument("Asset ID cannot be empty")
         );
 
-        // Check that the precision is less than [`Decimal256::DECIMAL_PLACES`]:
+        // Check that the precision fits in Decimal256's fractional places:
         ensure!(
-            self.precision <= MAX_DECIMAL_PRECISION,
+            self.precision <= MAX_ASSET_MAPPING_PRECISION,
             illegal_argument(format!(
                 "{}: precision must be <= {}",
-                self.asset_id, MAX_DECIMAL_PRECISION
+                self.asset_id, MAX_ASSET_MAPPING_PRECISION
             ))
         );
         Ok(())
@@ -68,8 +67,12 @@ pub trait IntoAssetPriceResponse {
 impl IntoAssetPriceResponse for (AssetMappingV1, PriceV1) {
     fn into_response(self) -> Result<AssetPriceResponseV1, ContractError> {
         let (asset_mapping, price) = self;
+        #[allow(deprecated)]
         let response = AssetPriceResponseV1 {
+            // Still emitted for older clients; new consumers use display + precision.
             price_usd: scale_price(price.price_usd, asset_mapping.precision)?,
+            display_price_usd: price.price_usd,
+            precision: asset_mapping.precision,
             as_of_epoch_second: price.as_of_epoch_second,
             expiration_epoch_seconds: price.as_of_epoch_second
                 + (asset_mapping.staleness_threshold_seconds as u64),
@@ -109,8 +112,8 @@ mod tests {
     #[cfg(test)]
     mod unit {
         use super::*;
+        use crate::constants::MAX_ASSET_MAPPING_PRECISION;
         use crate::tests::constants::{ALT_ASSET_ID_BTC, ASSET_ID_BTC};
-        use democratized_prime_lib::common::constants::MAX_DECIMAL_PRECISION;
         use result_extensions::ResultExtensions;
 
         #[test]
@@ -127,12 +130,25 @@ mod tests {
         }
 
         #[test]
+        fn accept_if_asset_mapping_precision_at_decimal256_places() {
+            let mapping = SaveAssetMappingRequestV1 {
+                alt_asset_id: ALT_ASSET_ID_BTC.to_owned(),
+                mapping: AssetMappingV1 {
+                    asset_id: ASSET_ID_BTC.to_owned(),
+                    precision: MAX_ASSET_MAPPING_PRECISION,
+                    staleness_threshold_seconds: DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS,
+                },
+            };
+            assert_eq!(mapping.validate(), Ok(()));
+        }
+
+        #[test]
         fn reject_if_asset_mapping_precision_is_out_of_range() {
             let mapping = SaveAssetMappingRequestV1 {
                 alt_asset_id: ALT_ASSET_ID_BTC.to_owned(),
                 mapping: AssetMappingV1 {
                     asset_id: ASSET_ID_BTC.to_owned(),
-                    precision: MAX_DECIMAL_PRECISION + 1,
+                    precision: MAX_ASSET_MAPPING_PRECISION + 1,
                     staleness_threshold_seconds: DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS,
                 },
             };
@@ -140,7 +156,7 @@ mod tests {
                 mapping.validate(),
                 illegal_argument(format!(
                     "{}: precision must be <= {}",
-                    ASSET_ID_BTC, MAX_DECIMAL_PRECISION
+                    ASSET_ID_BTC, MAX_ASSET_MAPPING_PRECISION
                 ))
                 .to_err()
             );

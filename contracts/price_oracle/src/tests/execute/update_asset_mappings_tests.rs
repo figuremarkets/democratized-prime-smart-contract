@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod unit {
+    use crate::constants::MAX_ASSET_MAPPING_PRECISION;
     use crate::contract::execute;
     use crate::execute::update_asset_mappings::ASSERT_OWNER_ERR;
     use crate::model::error::ContractError;
@@ -15,7 +16,7 @@ mod unit {
     };
     use cosmwasm_std::testing::{message_info, mock_env};
     use cosmwasm_std::{coin, Addr, Response, Timestamp};
-    use democratized_prime_lib::common::{illegal_argument, invalid_funds, MAX_DECIMAL_PRECISION};
+    use democratized_prime_lib::common::{illegal_argument, invalid_funds};
     use result_extensions::ResultExtensions;
 
     #[test]
@@ -79,7 +80,7 @@ mod unit {
         let (neth_alt_id, updated_neth_mapping) = AssetMappingV1Builder::new()
             .set_alt_asset_id(ALT_ASSET_ID_ETH.to_string())
             .set_asset_id(ASSET_ID_ETH.to_string())
-            .set_precision(MAX_DECIMAL_PRECISION + 1) // precision too large
+            .set_precision(MAX_ASSET_MAPPING_PRECISION + 1) // precision too large
             .build();
         let (nbtc_alt_id, updated_nbtc_mapping) = AssetMappingV1Builder::new()
             .set_alt_asset_id(ALT_ASSET_ID_BTC.to_string())
@@ -110,7 +111,7 @@ mod unit {
         assert_eq!(
             result,
             illegal_argument(format!(
-                "{ASSET_ID_ETH}: precision must be <= {MAX_DECIMAL_PRECISION}"
+                "{ASSET_ID_ETH}: precision must be <= {MAX_ASSET_MAPPING_PRECISION}"
             ))
             .to_err()
         );
@@ -127,7 +128,7 @@ mod unit {
         let (neth_alt_id, updated_neth_mapping) = AssetMappingV1Builder::new()
             .set_alt_asset_id(ALT_ASSET_ID_ETH.to_string())
             .set_asset_id(ASSET_ID_ETH.to_string())
-            .set_precision(MAX_DECIMAL_PRECISION + 1) // precision too large
+            .set_precision(9)
             .build();
         let (nbtc_alt_id, updated_nbtc_mapping) = AssetMappingV1Builder::new()
             .set_alt_asset_id(ALT_ASSET_ID_ETH.to_string()) // duplicate alt asset ID mapping
