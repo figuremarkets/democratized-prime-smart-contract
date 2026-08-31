@@ -58,6 +58,8 @@ const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 /// "nano" prefix => 1 BTC = 10^9 nbtc.figure.se. (These tests use small integer amounts for simplicity.)
 const COLLATERAL_DENOM: &str = "nbtc.figure.se";
+/// Second supported collateral used to test liquidation when one feed is stale or missing.
+const UNRELIABLE_COLLATERAL: &str = "neth.figure.se";
 
 fn default_instantiate_msg() -> InstantiateMsg {
     InstantiateMsg {
@@ -86,10 +88,16 @@ fn default_instantiate_msg() -> InstantiateMsg {
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
         min_lend: Uint128::new(1),
         min_borrow: Uint128::new(1),
-        supported_collateral_assets: vec![CollateralAssetV1 {
-            asset_id: COLLATERAL_DENOM.to_string(),
-            haircut: Some(Decimal256::percent(80)),
-        }],
+        supported_collateral_assets: vec![
+            CollateralAssetV1 {
+                asset_id: COLLATERAL_DENOM.to_string(),
+                haircut: Some(Decimal256::percent(80)),
+            },
+            CollateralAssetV1 {
+                asset_id: UNRELIABLE_COLLATERAL.to_string(),
+                haircut: Some(Decimal256::percent(80)),
+            },
+        ],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
@@ -125,7 +133,7 @@ fn set_oracle_prices(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
@@ -172,6 +180,11 @@ fn setup_liquidatable_borrower() -> (
     )
     .expect("lend should succeed");
 
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
     let collateral_amount = 1000u128;
     execute(
         deps.as_mut(),
@@ -183,11 +196,6 @@ fn setup_liquidatable_borrower() -> (
         ExecuteMsg::AddCollateral {},
     )
     .expect("add_collateral should succeed");
-
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
-    set_oracle_prices(&mut deps.querier, prices.clone());
 
     let debt_amount = 600u128; // LTV = 600 / (1000*0.8) = 0.75 (healthy)
     execute(
@@ -256,17 +264,173 @@ fn liquidate_for_custodian_fails() {
 }
 
 #[test]
-fn liquidate_fails_when_oracle_price_is_stale() {
+fn liquidate_succeeds_when_lending_denom_price_is_stale() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();
     let mut prices = HashMap::new();
     prices.insert(
         LENDING_DENOM.to_string(),
         stale_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
     );
-    prices.insert(
-        COLLATERAL_DENOM.to_string(),
-        stale_oracle_price(Decimal256::from_str("0.83").unwrap(), env.block.time),
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("liquidate should succeed using last-known lending denom price");
+}
+
+fn add_unreliable_dust_then_break_feed(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &Env,
+    unreliable_stale: bool,
+    omit_unreliable: bool,
+) {
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    if !omit_unreliable {
+        if unreliable_stale {
+            prices.insert(
+                UNRELIABLE_COLLATERAL.to_string(),
+                stale_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+            );
+        } else {
+            prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+        }
+    }
+    set_oracle_prices(&mut deps.querier, prices);
+}
+
+#[test]
+fn liquidate_succeeds_when_one_collateral_price_is_stale() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    add_unreliable_dust_then_break_feed(&mut deps, &env, true, false);
+
+    let min_repay = 374u128;
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("liquidate should succeed with one stale collateral feed");
+
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == "action")
+            .map(|a| a.value.as_str()),
+        Some("liquidate")
     );
+    let remaining = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(remaining.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+}
+
+#[test]
+fn liquidate_succeeds_when_one_collateral_price_is_missing() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    add_unreliable_dust_then_break_feed(&mut deps, &env, false, true);
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("liquidate should succeed with one missing collateral feed");
+}
+
+#[test]
+fn liquidate_fails_when_seizing_unpriceable_collateral() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    add_unreliable_dust_then_break_feed(&mut deps, &env, false, true);
+
+    let mut seize = collateral_to_seize_success();
+    seize.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(1));
+
+    let min_repay = 374u128;
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("Cannot seize unpriceable collateral"));
+            assert!(message.contains(UNRELIABLE_COLLATERAL));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn liquidate_succeeds_when_seizing_stale_collateral() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    add_unreliable_dust_then_break_feed(&mut deps, &env, true, false);
+
+    // 455 of A at 0.83 = 377.65; + 1 of B at last-known 1.0 = 378.65; band for repay 374 is [374, 381.48].
+    let mut seize = collateral_to_seize_success();
+    seize.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(1));
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize,
+        },
+    )
+    .expect("liquidate should succeed seizing stale-priced collateral at last-known");
+
+    let remaining = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert!(!remaining.amounts.contains_key(UNRELIABLE_COLLATERAL));
+}
+
+#[test]
+fn liquidate_fails_when_all_collateral_has_no_stored_price() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
     set_oracle_prices(&mut deps.querier, prices);
 
     let min_repay = 374u128;
@@ -282,8 +446,10 @@ fn liquidate_fails_when_oracle_price_is_stale() {
     .unwrap_err();
 
     match &err {
-        ContractError::StalePriceDataError { .. } => {}
-        _ => panic!("expected StalePriceDataError, got {:?}", err),
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("No priceable collateral"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
 }
 
@@ -793,6 +959,11 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
     )
     .expect("lend");
 
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
     execute(
         deps.as_mut(),
         env.clone(),
@@ -800,11 +971,6 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
         ExecuteMsg::AddCollateral {},
     )
     .expect("add_collateral");
-
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
-    set_oracle_prices(&mut deps.querier, prices.clone());
 
     execute(
         deps.as_mut(),
@@ -910,6 +1076,11 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
     )
     .expect("lend");
 
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
     execute(
         deps.as_mut(),
         env.clone(),
@@ -917,11 +1088,6 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
         ExecuteMsg::AddCollateral {},
     )
     .expect("add_collateral");
-
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
-    set_oracle_prices(&mut deps.querier, prices.clone());
 
     execute(
         deps.as_mut(),

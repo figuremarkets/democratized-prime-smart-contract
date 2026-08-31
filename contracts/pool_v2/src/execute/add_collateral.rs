@@ -3,7 +3,9 @@ use crate::model::error::{illegal_argument, illegal_state, ContractError};
 use crate::storage::{
     add_total_collateral, get_borrower_collateral, get_contract_state_v1, set_borrower_collateral,
 };
-use crate::utils::{validate_borrower_attrs, validate_borrower_collateral_type_limit};
+use crate::utils::{
+    require_fresh_asset_prices, validate_borrower_attrs, validate_borrower_collateral_type_limit,
+};
 use cosmwasm_std::{ensure, DepsMut, Env, MessageInfo, Response, Uint128};
 use result_extensions::ResultExtensions;
 use std::collections::{BTreeMap, HashSet};
@@ -11,8 +13,9 @@ use std::collections::{BTreeMap, HashSet};
 pub const ACTION: &str = "add_collateral";
 
 /// Add collateral to the sender's borrower position. Funds are taken from `info.funds`.
-/// All denoms must be in the pool's supported collateral assets; total distinct
-/// collateral types (existing + new) cannot exceed `max_borrower_collateral_types`.
+/// All denoms must be in the pool's supported collateral assets and have a fresh oracle
+/// price; total distinct collateral types (existing + new) cannot exceed
+/// `max_borrower_collateral_types`.
 ///
 /// No minimum add amount is enforced here. Collateral dust does not
 /// affect pool-wide liquidity or indexes (unlike lend); oracle + haircut value
@@ -20,7 +23,7 @@ pub const ACTION: &str = "add_collateral";
 /// max_borrower_collateral_types. We reject zero-amount coins to avoid no-op state.
 pub fn add_collateral(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
 ) -> Result<Response, ContractError> {
     let contract = get_contract_state_v1(deps.storage)?;
@@ -54,6 +57,14 @@ pub fn add_collateral(
             illegal_argument(format!("Unsupported collateral asset: {}", coin.denom))
         );
     }
+
+    let deposited_denoms: Vec<String> = new_collateral.iter().map(|c| c.denom.clone()).collect();
+    require_fresh_asset_prices(
+        &deps.querier,
+        &env.block.time,
+        &contract.price_oracle_address,
+        &deposited_denoms,
+    )?;
 
     let mut current = get_borrower_collateral(deps.storage, &borrower)?;
     validate_borrower_collateral_type_limit(

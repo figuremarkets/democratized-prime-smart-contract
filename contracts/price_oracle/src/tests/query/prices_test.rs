@@ -40,7 +40,8 @@ mod query_prices_by_asset_unit {
         // price is 10 seconds old:
         setup_price(deps.as_mut().storage, EPOCH_SECOND_JAN_01_2025 - 10);
 
-        let result = query_prices_by_assets(&deps.storage, vec![String::from("nbtc.figure.se")]);
+        let result =
+            query_prices_by_assets(&deps.storage, vec![String::from("nbtc.figure.se")], false);
         let result_body: PriceMapResponse = from_json(result.unwrap()).unwrap();
 
         let mut expected: PriceMapResponse = HashMap::new();
@@ -69,7 +70,7 @@ mod query_prices_by_asset_unit {
         // price is 10 seconds old:
         setup_price(deps.as_mut().storage, EPOCH_SECOND_JAN_01_2025 - 10);
 
-        let result = query_prices_by_assets(&deps.storage, vec![String::from("BTC")]);
+        let result = query_prices_by_assets(&deps.storage, vec![String::from("BTC")], false);
         let result_body: PriceMapResponse = from_json(result.unwrap()).unwrap();
 
         let mut expected: PriceMapResponse = HashMap::new();
@@ -97,7 +98,8 @@ mod query_prices_by_asset_unit {
         );
         // No price for BTC
 
-        let result = query_prices_by_assets(&deps.storage, vec![String::from("nbtc.figure.se")]);
+        let result =
+            query_prices_by_assets(&deps.storage, vec![String::from("nbtc.figure.se")], false);
         assert_eq!(
             result,
             QueryError::NotFoundError {
@@ -117,6 +119,7 @@ mod query_prices_by_asset_unit {
         let result = query_prices_by_assets(
             &deps.storage,
             vec![String::from("nbtc.figure.se"), String::from("BTC")],
+            false,
         );
         assert_eq!(
             result,
@@ -125,6 +128,44 @@ mod query_prices_by_asset_unit {
             }
             .to_err()
         );
+    }
+
+    #[test]
+    fn skip_missing_omits_assets_without_a_stored_price() {
+        let mut deps = mock_dependencies(&[]);
+
+        setup_mapping(
+            deps.as_mut().storage,
+            DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS,
+        );
+        setup_price(deps.as_mut().storage, EPOCH_SECOND_JAN_01_2025 - 10);
+
+        let result = query_prices_by_assets(
+            &deps.storage,
+            vec![
+                String::from("nbtc.figure.se"),
+                String::from("missing.asset"),
+            ],
+            true,
+        );
+        let result_body: PriceMapResponse = from_json(result.unwrap()).unwrap();
+
+        assert_eq!(result_body.len(), 1);
+        assert!(result_body.contains_key("nbtc.figure.se"));
+        assert!(!result_body.contains_key("missing.asset"));
+    }
+
+    #[test]
+    fn skip_missing_returns_empty_map_when_no_requested_asset_has_a_price() {
+        let deps = mock_dependencies(&[]);
+
+        let result = query_prices_by_assets(
+            &deps.storage,
+            vec![String::from("nbtc.figure.se"), String::from("BTC")],
+            true,
+        );
+        let result_body: PriceMapResponse = from_json(result.unwrap()).unwrap();
+        assert!(result_body.is_empty());
     }
 }
 
