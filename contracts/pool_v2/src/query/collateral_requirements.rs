@@ -59,8 +59,13 @@ pub fn query_collateral_requirements(
             }
         }
     }
-    let prices = get_price_from_oracle(&deps.querier, &contract.price_oracle_address, &asset_ids)
-        .map_err(QueryError::Contract)?;
+    let prices = get_price_from_oracle(
+        &deps.querier,
+        &contract.price_oracle_address,
+        &asset_ids,
+        false,
+    )
+    .map_err(QueryError::Contract)?;
 
     // Check the price data for staleness:
     for (asset_id, price) in prices.iter() {

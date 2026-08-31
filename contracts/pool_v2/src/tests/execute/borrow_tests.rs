@@ -93,7 +93,7 @@ fn set_oracle_prices(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
@@ -137,6 +137,12 @@ fn setup_borrow_ready() -> (
     )
     .expect("lend should succeed");
 
+    // Oracle: lending denom $1, BTC $70k (required before AddCollateral)
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    set_oracle_prices(&mut deps.querier, prices);
+
     // Add collateral: 250 BTC at $70k with 80% haircut -> 250 * 70000 * 0.8 = $14M collateral value; borrow 10M -> LTV ≈ 0.71 < 0.80
     let btc_collateral_amount = 250u128;
     execute(
@@ -149,12 +155,6 @@ fn setup_borrow_ready() -> (
         ExecuteMsg::AddCollateral {},
     )
     .expect("add_collateral should succeed");
-
-    // Oracle: lending denom $1, BTC $70k
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
-    set_oracle_prices(&mut deps.querier, prices);
 
     (deps, env)
 }
@@ -309,6 +309,10 @@ fn borrow_fails_below_min_borrow() {
         ExecuteMsg::Lend {},
     )
     .unwrap();
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    set_oracle_prices(&mut deps.querier, prices);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -316,10 +320,6 @@ fn borrow_fails_below_min_borrow() {
         ExecuteMsg::AddCollateral {},
     )
     .unwrap();
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
-    set_oracle_prices(&mut deps.querier, prices);
 
     let err = execute(
         deps.as_mut(),

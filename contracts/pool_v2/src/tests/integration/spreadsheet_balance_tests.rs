@@ -158,7 +158,7 @@ fn update_wasm_combined(querier: &mut provwasm_mocks::MockProvenanceQuerier) {
                     }
                 }
                 if contract_addr.as_str() == ORACLE {
-                    if let Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) =
+                    if let Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) =
                         from_json::<PriceOracleQueryMsg>(msg)
                     {
                         if let Some(prices) = ORACLE_PRICES.with(|p| p.borrow().clone()) {

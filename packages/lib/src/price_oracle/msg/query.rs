@@ -16,5 +16,11 @@ pub enum QueryMsg {
     },
 
     #[returns(PriceMapResponse)]
-    GetPricesByAsset { assets: Vec<String> },
+    GetPricesByAsset {
+        assets: Vec<String>,
+        /// When true, assets with no stored price are omitted from the map instead of
+        /// erroring. Defaults to false (all-or-nothing).
+        #[serde(default)]
+        skip_missing: bool,
+    },
 }

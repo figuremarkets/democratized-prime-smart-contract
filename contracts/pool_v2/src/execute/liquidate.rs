@@ -5,6 +5,9 @@
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
+//! Collateral with **no stored** oracle price is valued at zero for LTV/min-repay and cannot
+//! be seized. A **stale** stored price is used as last-known (not fatal) so liquidations
+//! are not frozen by a paused feed. The lending denom must have a stored price.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → liquidatable →
 //! minimum repay (USD → lending units) → sent funds and scaled repay → collateral value band and
@@ -29,7 +32,7 @@ use crate::storage::{
 };
 use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_borrow_value_usd,
-    calculate_total_collateral_value_usd, get_asset_prices_for_borrower, get_borrower_health,
+    calculate_total_collateral_value_usd, get_asset_prices_for_liquidation, get_borrower_health,
     scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
     validate_single_coin_denom, WithRates,
 };
@@ -79,12 +82,16 @@ pub fn liquidate(
     );
 
     // ---------- 3. Must be liquidatable (LTV >= liquidation_rate) ----------
-    let asset_prices = get_asset_prices_for_borrower(
-        &deps.querier,
-        &env.block.time,
-        &contract,
-        &borrower_collateral,
-    )?;
+    let asset_prices =
+        get_asset_prices_for_liquidation(&deps.querier, &contract, &borrower_collateral)?;
+    let has_priceable_collateral = borrower_collateral
+        .amounts
+        .keys()
+        .any(|id| asset_prices.get(id).is_some_and(|p| !p.is_zero_price()));
+    ensure!(
+        has_priceable_collateral,
+        illegal_argument("No priceable collateral (all held assets have no stored oracle price)",)
+    );
     let (health, _ltv) = get_borrower_health(
         &contract,
         &contract.supported_collateral_assets,
@@ -234,6 +241,13 @@ pub fn liquidate(
         let price = asset_prices
             .get(asset_id)
             .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))?;
+        ensure!(
+            !price.is_zero_price(),
+            illegal_argument(format!(
+                "Cannot seize unpriceable collateral (no stored oracle price): {}",
+                asset_id
+            ))
+        );
         let value = price.value_usd(seize_amount.u128())?;
         seized_value_usd = seized_value_usd.checked_add(value)?;
     }

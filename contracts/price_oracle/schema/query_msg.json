@@ -61,6 +61,11 @@
               "items": {
                 "type": "string"
               }
+            },
+            "skip_missing": {
+              "description": "When true, assets with no stored price are omitted from the map instead of erroring. Defaults to false (all-or-nothing).",
+              "default": false,
+              "type": "boolean"
             }
           },
           "additionalProperties": false

@@ -12,11 +12,16 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_contract_state_v1;
+use crate::tests::fixtures::fresh_oracle_price;
 use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
-use cosmwasm_std::{coin, Addr, Decimal256, Uint128};
-use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
+use cosmwasm_std::{
+    coin, from_json, to_json_binary, Addr, ContractResult, Decimal256, Env, MemoryStorage,
+    OwnedDeps, QuerierResult, SystemError, SystemResult, Uint128, WasmQuery,
+};
+use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use provwasm_mocks::mock_provenance_dependencies;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 const BORROWER: &str = "tp1borrower";
@@ -85,6 +90,38 @@ fn setup_instantiated() -> (
         msg,
     )
     .expect("instantiate should succeed");
+    let mut prices = HashMap::new();
+    prices.insert(
+        ASSET_ONE.to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        ASSET_TWO.to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    let handler = move |query: &WasmQuery| -> QuerierResult {
+        match query {
+            WasmQuery::Smart { contract_addr, msg } => {
+                if contract_addr.as_str() != ORACLE {
+                    return SystemResult::Err(SystemError::NoSuchContract {
+                        addr: contract_addr.to_string(),
+                    });
+                }
+                match from_json::<PriceOracleQueryMsg>(msg) {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
+                        SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
+                    }
+                    _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                        kind: "unexpected oracle query".to_string(),
+                    }),
+                }
+            }
+            _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                kind: "expected WasmQuery::Smart".to_string(),
+            }),
+        }
+    };
+    deps.querier.mock_querier.update_wasm(handler);
     (deps, env)
 }
 

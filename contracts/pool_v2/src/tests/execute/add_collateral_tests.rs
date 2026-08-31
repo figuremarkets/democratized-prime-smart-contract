@@ -9,15 +9,20 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_borrower_collateral;
+use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
-use cosmwasm_std::{coin, Addr, Decimal256, Uint128};
-use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
+use cosmwasm_std::{
+    coin, from_json, to_json_binary, Addr, ContractResult, Decimal256, Env, MemoryStorage,
+    OwnedDeps, QuerierResult, SystemError, SystemResult, Uint128, WasmQuery,
+};
+use democratized_prime_lib::price_oracle::model::PriceMapResponse;
+use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use provwasm_mocks::mock_provenance_dependencies;
 use provwasm_std::types::provenance::attribute::v1::{
     Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 const BORROWER: &str = "tp1borrower";
@@ -85,7 +90,62 @@ fn setup_instantiated() -> (
         msg,
     )
     .expect("instantiate should succeed");
+    let mut prices = HashMap::new();
+    prices.insert(
+        ASSET_ONE.to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        ASSET_TWO.to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
     (deps, env)
+}
+
+fn set_oracle_prices(
+    querier: &mut provwasm_mocks::MockProvenanceQuerier,
+    prices: PriceMapResponse,
+) {
+    let handler = move |query: &WasmQuery| -> QuerierResult {
+        match query {
+            WasmQuery::Smart { contract_addr, msg } => {
+                if contract_addr.as_str() != ORACLE {
+                    return SystemResult::Err(SystemError::NoSuchContract {
+                        addr: contract_addr.to_string(),
+                    });
+                }
+                match from_json::<PriceOracleQueryMsg>(msg) {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
+                        SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
+                    }
+                    _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                        kind: "unexpected oracle query".to_string(),
+                    }),
+                }
+            }
+            _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                kind: "expected WasmQuery::Smart".to_string(),
+            }),
+        }
+    };
+    querier.mock_querier.update_wasm(handler);
+}
+
+fn mock_fresh_supported_prices(
+    querier: &mut provwasm_mocks::MockProvenanceQuerier,
+    block_time: cosmwasm_std::Timestamp,
+) {
+    let mut prices = HashMap::new();
+    prices.insert(
+        ASSET_ONE.to_string(),
+        fresh_oracle_price(Decimal256::one(), block_time),
+    );
+    prices.insert(
+        ASSET_TWO.to_string(),
+        fresh_oracle_price(Decimal256::one(), block_time),
+    );
+    set_oracle_prices(querier, prices);
 }
 
 #[test]
@@ -222,6 +282,7 @@ fn add_collateral_fails_too_many_collateral_types() {
         msg,
     )
     .unwrap();
+    mock_fresh_supported_prices(&mut deps.querier, env.block.time);
 
     let info = message_info(
         &Addr::unchecked(BORROWER),
@@ -299,6 +360,7 @@ fn add_collateral_succeeds_when_borrower_attr_required_and_present() {
         pagination: None,
     };
     QueryAttributeRequest::mock_response(&mut deps.querier, attr_resp);
+    mock_fresh_supported_prices(&mut deps.querier, env.block.time);
 
     let info = message_info(&Addr::unchecked(BORROWER), &[coin(100, ASSET_ONE)]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::AddCollateral {})
@@ -307,4 +369,51 @@ fn add_collateral_succeeds_when_borrower_attr_required_and_present() {
     assert_eq!(res.attributes[0].value, ACTION);
     let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
     assert_eq!(collateral.amounts.get(ASSET_ONE), Some(&100));
+}
+
+#[test]
+fn add_collateral_fails_when_oracle_price_is_missing() {
+    let (mut deps, env) = setup_instantiated();
+    set_oracle_prices(&mut deps.querier, HashMap::new());
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(100, ASSET_ONE)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::NotFoundError { message } => {
+            assert!(message.contains(ASSET_ONE));
+        }
+        _ => panic!("expected NotFoundError, got {:?}", err),
+    }
+}
+
+#[test]
+fn add_collateral_fails_when_oracle_price_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    let mut prices = HashMap::new();
+    prices.insert(
+        ASSET_ONE.to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(100, ASSET_ONE)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::StalePriceDataError { asset_id, .. } => {
+            assert_eq!(asset_id, ASSET_ONE);
+        }
+        _ => panic!("expected StalePriceDataError, got {:?}", err),
+    }
 }

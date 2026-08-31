@@ -136,7 +136,7 @@ fn set_oracle_prices(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
