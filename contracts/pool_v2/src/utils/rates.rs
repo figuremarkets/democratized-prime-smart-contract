@@ -334,7 +334,11 @@ pub fn apply_pro_rata_liquidity_index_haircut(
         )
     );
     let scaled = Decimal256::from_atomics(Uint256::from(reserve.total_scaled_liquidity), 0)
-        .unwrap_or(Decimal256::zero());
+        .map_err(|_| {
+            illegal_state(
+                "cannot apply liquidity index haircut: total_scaled_liquidity overflows Decimal256",
+            )
+        })?;
     ensure!(
         !scaled.is_zero(),
         illegal_state("cannot apply liquidity index haircut: total_scaled_liquidity is zero")
