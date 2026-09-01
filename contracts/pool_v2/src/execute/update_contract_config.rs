@@ -32,6 +32,7 @@ pub struct UpdateContractConfigParams {
     pub commit_market_id: Option<u32>,
     pub bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
     pub custodian: Option<String>,
+    pub max_liquidation_staleness_seconds: Option<u64>,
 }
 
 /// Update contract config. Contract custodian only; no funds. Only provided fields are updated.
@@ -58,7 +59,8 @@ pub fn update_contract_config(
         || params.max_borrower_collateral_types.is_some()
         || params.commit_market_id.is_some()
         || params.bad_debt_loss_allocation.is_some()
-        || params.custodian.is_some();
+        || params.custodian.is_some()
+        || params.max_liquidation_staleness_seconds.is_some();
     ensure!(
         has_any,
         illegal_argument("At least one config field must be provided")
@@ -127,6 +129,9 @@ pub fn update_contract_config(
     if let Some(new_custodian) = params.custodian {
         let new_custodian = deps.api.addr_validate(new_custodian.trim())?;
         contract.custodian = Some(new_custodian);
+    }
+    if let Some(v) = params.max_liquidation_staleness_seconds {
+        contract.max_liquidation_staleness_seconds = v;
     }
 
     ensure!(

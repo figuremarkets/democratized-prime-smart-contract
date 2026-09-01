@@ -54,6 +54,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 604800,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
@@ -416,4 +417,34 @@ fn add_collateral_fails_when_oracle_price_is_stale() {
         }
         _ => panic!("expected StalePriceDataError, got {:?}", err),
     }
+}
+
+#[test]
+fn add_collateral_succeeds_when_already_held_denom_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(100, ASSET_ONE)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("initial add should succeed");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        ASSET_ONE.to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(50, ASSET_ONE)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("top-up of already-held denom should succeed while feed is stale");
+
+    let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(collateral.amounts.get(ASSET_ONE), Some(&150));
 }

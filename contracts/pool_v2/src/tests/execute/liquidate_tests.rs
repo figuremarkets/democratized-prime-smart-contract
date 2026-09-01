@@ -9,18 +9,21 @@ use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::health::BorrowerHealthV1;
-use crate::model::{BadDebtLossAllocation, CollateralAssetV1, Denom, RateParamsV1};
+use crate::model::{
+    BadDebtLossAllocation, CollateralAssetV1, Denom, RateParamsV1,
+    DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
+};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{
     get_borrower_collateral, get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow,
 };
-use crate::tests::fixtures::stale_oracle_price;
+use crate::tests::fixtures::{oracle_price_expired_for, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
     compute_effective_reserve, get_asset_prices_for_borrower, get_borrower_health,
-    scaled_to_underlying_borrow,
+    scaled_to_underlying_borrow, ZeroPricePolicy,
 };
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -83,6 +86,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 604800,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
@@ -427,6 +431,48 @@ fn liquidate_succeeds_when_seizing_stale_collateral() {
 }
 
 #[test]
+fn liquidate_fails_when_seizing_collateral_beyond_staleness_bound() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    add_unreliable_dust_then_break_feed(&mut deps, &env, true, false);
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    prices.insert(
+        UNRELIABLE_COLLATERAL.to_string(),
+        oracle_price_expired_for(
+            Decimal256::from_str("1.0").unwrap(),
+            env.block.time,
+            DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+        ),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let mut seize = collateral_to_seize_success();
+    seize.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(1));
+
+    let min_repay = 374u128;
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("Cannot seize unpriceable collateral"));
+            assert!(message.contains(UNRELIABLE_COLLATERAL));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
 fn liquidate_fails_when_all_collateral_has_no_stored_price() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();
     let mut prices = HashMap::new();
@@ -518,6 +564,7 @@ fn liquidate_healthy_borrower_fails() {
         &asset_prices,
         &collateral,
         Uint128::from(debt),
+        ZeroPricePolicy::TreatAsWorthless,
     )
     .unwrap();
     assert_eq!(health, BorrowerHealthV1::Liquidatable);

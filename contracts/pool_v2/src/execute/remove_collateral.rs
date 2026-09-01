@@ -8,6 +8,7 @@ use crate::storage::{
 use crate::utils::{
     get_asset_prices_for_borrower, get_borrower_health, scaled_to_underlying_borrow,
     update_reserve_indexes, validate_borrower_attrs, validate_borrower_is_healthy, WithRates,
+    ZeroPricePolicy,
 };
 use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 use std::collections::{BTreeMap, HashSet};
@@ -104,6 +105,7 @@ pub fn remove_collateral(
             &asset_prices,
             &new_collateral,
             Uint128::from(debt_underlying),
+            ZeroPricePolicy::TreatAsWorthless,
         )?;
         validate_borrower_is_healthy(health, loan_to_value, &contract)?;
     }

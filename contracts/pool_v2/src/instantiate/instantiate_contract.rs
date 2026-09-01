@@ -158,7 +158,7 @@ pub fn instantiate_contract(
         ))
     );
 
-    let custodian: Addr = deps.api.addr_validate(&msg.custodian.trim())?;
+    let custodian: Addr = deps.api.addr_validate(msg.custodian.trim())?;
 
     let pool: Addr = env.contract.address.clone();
 
@@ -182,6 +182,7 @@ pub fn instantiate_contract(
         commit_market_id: msg.commit_market_id,
         bad_debt_loss_allocation: msg.bad_debt_loss_allocation,
         custodian: Some(custodian.to_owned()),
+        max_liquidation_staleness_seconds: msg.max_liquidation_staleness_seconds,
     };
     set_contract_state_v1(deps.storage, &contract_state)?;
     initialize_owner(deps.storage, deps.api, Some(info.sender.as_str()))?;

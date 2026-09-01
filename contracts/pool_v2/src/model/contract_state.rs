@@ -6,6 +6,14 @@ use crate::model::collateral::CollateralAssetV1;
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{Denom, RateParamsV1};
 
+/// Default outer bound on last-known oracle prices used for liquidation (7 days).
+/// `0` means any expired price is unpriceable (last-known disabled).
+pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+pub fn default_max_liquidation_staleness_seconds() -> u64 {
+    DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS
+}
+
 /// How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -111,6 +119,12 @@ pub struct ContractStateV1 {
     /// - update contract rate parameters
     /// - update the types of collateral supported by the contract
     pub custodian: Option<Addr>,
+
+    /// Seconds past oracle expiration after which a stored price is unpriceable for
+    /// liquidation (valued at $0, not seizable). Fresh prices and last-known prices still
+    /// within this bound remain usable. Default 7 days. `0` disables last-known prices.
+    #[serde(rename = "mlss", default = "default_max_liquidation_staleness_seconds")]
+    pub max_liquidation_staleness_seconds: u64,
 }
 
 impl ContractStateV1 {

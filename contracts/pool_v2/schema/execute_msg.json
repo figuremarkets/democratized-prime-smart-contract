@@ -378,6 +378,16 @@
               "format": "uint32",
               "minimum": 0.0
             },
+            "max_liquidation_staleness_seconds": {
+              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known prices.",
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
             "min_borrow": {
               "anyOf": [
                 {

@@ -15,6 +15,16 @@ use cosmwasm_std::{ensure, Decimal256, Uint128};
 use democratized_prime_lib::price_oracle::model::PriceMapResponse;
 use result_extensions::ResultExtensions;
 
+/// How a missing or zero collateral price is treated when valuing a position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZeroPricePolicy {
+    /// Error on a zero or absent collateral price.
+    Reject,
+    /// Value the asset at $0. Used for liquidation and for borrow / remove_collateral /
+    /// queries so a dead feed does not freeze the position (the pool simply gives no credit).
+    TreatAsWorthless,
+}
+
 /// Computes health state and LTV for a borrower given collateral, prices, and debt (underlying amount).
 pub fn get_borrower_health(
     contract_state: &ContractStateV1,
@@ -22,6 +32,7 @@ pub fn get_borrower_health(
     asset_prices: &PriceMapResponse,
     borrower_collateral: &BorrowerCollateralV1,
     underlying_debt: Uint128,
+    zero_price_policy: ZeroPricePolicy,
 ) -> Result<(BorrowerHealthV1, Decimal256), ContractError> {
     let loan_to_value = calculate_ltv(
         contract_state,
@@ -29,6 +40,7 @@ pub fn get_borrower_health(
         asset_prices,
         borrower_collateral,
         underlying_debt,
+        zero_price_policy,
     )?;
     let health = get_health_from_ltv(contract_state, loan_to_value)?;
     (health, loan_to_value).to_ok()
@@ -55,14 +67,19 @@ pub fn calculate_ltv(
     asset_prices: &PriceMapResponse,
     borrower_collateral: &BorrowerCollateralV1,
     underlying_debt: Uint128,
+    zero_price_policy: ZeroPricePolicy,
 ) -> Result<Decimal256, ContractError> {
     let borrow_balance_usd = calculate_borrow_value_usd(
         underlying_debt,
         &contract_state.lending_denom.name,
         asset_prices,
     )?;
-    let total_collateral_value_usd =
-        calculate_total_collateral_value_usd(borrower_collateral, asset_prices, supported_assets)?;
+    let total_collateral_value_usd = calculate_total_collateral_value_usd(
+        borrower_collateral,
+        asset_prices,
+        supported_assets,
+        zero_price_policy,
+    )?;
 
     if borrow_balance_usd.is_zero() && total_collateral_value_usd.is_zero() {
         return Decimal256::zero().to_ok();
@@ -84,17 +101,30 @@ pub fn calculate_total_collateral_value_usd(
     collateral: &BorrowerCollateralV1,
     prices: &PriceMapResponse,
     supported_assets: &[CollateralAssetV1],
+    zero_price_policy: ZeroPricePolicy,
 ) -> Result<Decimal256, ContractError> {
     let mut total = Decimal256::zero();
     for (asset_id, amount) in collateral.amounts.iter() {
-        let price = prices
-            .get(asset_id)
-            .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))?;
+        let price = match prices.get(asset_id) {
+            Some(p) => p,
+            None => match zero_price_policy {
+                ZeroPricePolicy::Reject => {
+                    return Err(not_found(format!("Price of asset: {}", asset_id)));
+                }
+                ZeroPricePolicy::TreatAsWorthless => continue,
+            },
+        };
+        if price.is_zero_price() {
+            match zero_price_policy {
+                ZeroPricePolicy::Reject => {
+                    return Err(illegal_argument(format!(
+                        "Collateral price is zero: {asset_id}"
+                    )));
+                }
+                ZeroPricePolicy::TreatAsWorthless => continue,
+            }
+        }
         let haircut = haircut_percentage(supported_assets, asset_id);
-        ensure!(
-            !price.is_zero_price(),
-            illegal_argument(format!("Collateral price is zero: {asset_id}"))
-        );
         let value = price
             .value_usd(*amount)?
             .checked_mul(haircut)

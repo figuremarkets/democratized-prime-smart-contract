@@ -60,6 +60,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 604800,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
@@ -573,7 +574,13 @@ fn borrow_fails_when_oracle_price_is_stale_for_collateral_asset() {
     .unwrap_err();
 
     match &err {
-        ContractError::StalePriceDataError { .. } => {}
-        _ => panic!("expected StalePriceDataError, got {:?}", err),
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("No collateral for loans"),
+                "stale collateral is valued at $0 so borrow has no credit: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
 }

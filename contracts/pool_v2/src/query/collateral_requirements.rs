@@ -4,11 +4,11 @@
 //! When `borrower` is set: existing debt is included in the required total, and existing
 //! collateral is subtracted so per-asset amounts are the *additional* collateral needed.
 
-use crate::model::error::{not_found, ContractError, QueryError};
+use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
 use crate::model::{haircut_percentage, CollateralRequirementsResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
-use crate::utils::health::calculate_total_collateral_value_usd;
+use crate::utils::health::{calculate_total_collateral_value_usd, ZeroPricePolicy};
 use crate::utils::{
     calculate_borrow_value_usd, compute_effective_reserve, get_price_from_oracle,
     scaled_to_underlying_borrow,
@@ -63,11 +63,11 @@ pub fn query_collateral_requirements(
         &deps.querier,
         &contract.price_oracle_address,
         &asset_ids,
-        false,
+        true,
     )
     .map_err(QueryError::Contract)?;
 
-    // Check the price data for staleness:
+    // Present-and-stale still errors; missing prices are omitted (skip_missing) and valued at $0.
     for (asset_id, price) in prices.iter() {
         if price.is_stale(env.block.time) {
             return Err(ContractError::StalePriceDataError {
@@ -113,6 +113,7 @@ pub fn query_collateral_requirements(
             bc,
             &prices,
             &contract.supported_collateral_assets,
+            ZeroPricePolicy::TreatAsWorthless,
         )
         .map_err(QueryError::Contract)?;
         required_collateral_value_usd
@@ -125,23 +126,24 @@ pub fn query_collateral_requirements(
     let mut required: Vec<AssetRequirementV1> = Vec::with_capacity(collateral_assets.len());
     for asset_id in collateral_assets {
         let haircut = haircut_percentage(&contract.supported_collateral_assets, asset_id);
-        let price = prices.get(asset_id).ok_or_else(|| {
-            QueryError::Contract(not_found(format!("Price of asset: {}", asset_id)))
-        })?;
-        let amount = if price.is_zero_price() || haircut.is_zero() {
-            // Asset has zero value per unit (e.g. price or haircut is 0); no finite amount satisfies. Preserve 1:1 with collateral_assets.
-            Uint128::zero()
-        } else {
-            // units * (display / 10^precision) * haircut >= value_to_cover
-            let pre_haircut = value_to_cover
-                .checked_div(haircut)
-                .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
-            match price.amount_from_usd(pre_haircut) {
-                Ok(amt) => Uint128::from(amt),
-                // Cheap high-precision asset: required base units do not fit u128.
-                // Same as zero-price: no finite representable amount satisfies.
-                Err(ContractError::AmountNotRepresentable) => Uint128::zero(),
-                Err(e) => return Err(QueryError::Contract(e)),
+        let amount = match prices.get(asset_id) {
+            None => Uint128::zero(),
+            Some(price) if price.is_zero_price() || haircut.is_zero() => {
+                // Asset has zero value per unit (e.g. price or haircut is 0); no finite amount satisfies. Preserve 1:1 with collateral_assets.
+                Uint128::zero()
+            }
+            Some(price) => {
+                // units * (display / 10^precision) * haircut >= value_to_cover
+                let pre_haircut = value_to_cover
+                    .checked_div(haircut)
+                    .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
+                match price.amount_from_usd(pre_haircut) {
+                    Ok(amt) => Uint128::from(amt),
+                    // Cheap high-precision asset: required base units do not fit u128.
+                    // Same as zero-price: no finite representable amount satisfies.
+                    Err(ContractError::AmountNotRepresentable) => Uint128::zero(),
+                    Err(e) => return Err(QueryError::Contract(e)),
+                }
             }
         };
         required.push(AssetRequirementV1 {

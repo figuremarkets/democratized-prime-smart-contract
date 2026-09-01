@@ -2,7 +2,7 @@
 
 use crate::contract::query;
 use crate::model::error::{ContractError, QueryError};
-use crate::model::{BorrowerCollateralV1, ReserveStateV1};
+use crate::model::{BorrowerCollateralV1, CollateralRequirementsResponseV1, ReserveStateV1};
 use crate::msg::QueryMsg;
 use crate::storage::{
     get_reserve_state_v1, set_borrower_collateral, set_reserve_state_v1, set_scaled_borrow,
@@ -141,7 +141,7 @@ fn get_collateral_requirements_fails_when_oracle_has_no_lending_denom_price() {
 }
 
 #[test]
-fn get_collateral_requirements_fails_when_oracle_has_no_price_for_requested_collateral_asset() {
+fn get_collateral_requirements_returns_zero_amount_when_requested_asset_has_no_price() {
     let (mut deps, env) = setup_instantiated();
     let mut prices = HashMap::new();
     prices.insert(
@@ -154,7 +154,7 @@ fn get_collateral_requirements_fails_when_oracle_has_no_price_for_requested_coll
     );
     set_oracle_prices(&mut deps, prices);
 
-    let err = query(
+    let bin = query(
         deps.as_ref(),
         env,
         QueryMsg::GetCollateralRequirements {
@@ -163,20 +163,14 @@ fn get_collateral_requirements_fails_when_oracle_has_no_price_for_requested_coll
             collateral_assets: vec!["asset.one".to_string(), "asset.unknown".to_string()],
         },
     )
-    .unwrap_err();
-    match &err {
-        QueryError::Contract(_) => {}
-        _ => panic!(
-            "expected Contract error (missing price for asset), got {:?}",
-            err
-        ),
-    }
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Price of asset") && msg.contains("asset.unknown"),
-        "error should mention missing price for requested asset: {}",
-        msg
-    );
+    .expect("missing requested asset should be valued at zero, not error");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    let unknown = resp
+        .required
+        .iter()
+        .find(|r| r.asset_id == "asset.unknown")
+        .expect("preserve 1:1 with collateral_assets");
+    assert!(unknown.amount.is_zero());
 }
 
 #[test]

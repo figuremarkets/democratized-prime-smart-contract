@@ -3,7 +3,9 @@ use crate::model::error::QueryError;
 use crate::model::health::BorrowerHealthResponseV1;
 use crate::model::query::{AssetRequirementV1, BorrowerPositionResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
-use crate::utils::health::{calculate_total_collateral_value_usd, get_borrower_health};
+use crate::utils::health::{
+    calculate_total_collateral_value_usd, get_borrower_health, ZeroPricePolicy,
+};
 use crate::utils::{
     compute_effective_reserve, get_asset_prices_for_borrower, scaled_to_underlying_borrow,
 };
@@ -57,6 +59,7 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
                 &borrower_collateral,
                 &prices,
                 &contract.supported_collateral_assets,
+                ZeroPricePolicy::TreatAsWorthless,
             )
             .map_err(QueryError::Contract)?;
             let collateral_value_usd = collateral_value.to_string();
@@ -68,6 +71,7 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
                 &prices,
                 &borrower_collateral,
                 debt_u128,
+                ZeroPricePolicy::TreatAsWorthless,
             );
             match health_result {
                 Ok((h, ltv)) => (

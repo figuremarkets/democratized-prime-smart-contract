@@ -55,6 +55,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 604800,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
@@ -575,6 +576,7 @@ fn transfer_fails_when_require_commit_on_exit() {
             min_lend: None,
             min_borrow: None,
             max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,

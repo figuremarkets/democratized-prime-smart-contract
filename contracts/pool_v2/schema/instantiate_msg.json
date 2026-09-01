@@ -86,6 +86,13 @@
       "format": "uint32",
       "minimum": 0.0
     },
+    "max_liquidation_staleness_seconds": {
+      "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted JSON uses 7 days. `0` disables last-known prices.",
+      "default": 604800,
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
     "min_borrow": {
       "description": "Minimum amount per borrow (in lending denom base units). - Must be at least 1. - Independent of [`InstantiateMsg::min_lend`].",
       "allOf": [
