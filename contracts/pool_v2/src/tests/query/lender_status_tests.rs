@@ -40,6 +40,7 @@ fn get_lender_status_after_set_require_commit_true() {
             min_lend: None,
             min_borrow: None,
             max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,

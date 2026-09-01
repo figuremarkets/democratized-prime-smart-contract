@@ -13,3 +13,14 @@ pub fn stale_oracle_price(price_usd: Decimal256, block_time: Timestamp) -> Asset
     let s = block_time.seconds();
     AssetPriceResponseV1::new(price_usd, s, s.saturating_sub(1))
 }
+
+/// Stored price whose expiration is `expired_for_secs` before `block_time` (last-known age).
+pub fn oracle_price_expired_for(
+    price_usd: Decimal256,
+    block_time: Timestamp,
+    expired_for_secs: u64,
+) -> AssetPriceResponseV1 {
+    let expiration = block_time.seconds().saturating_sub(expired_for_secs);
+    let as_of = expiration.saturating_sub(1);
+    AssetPriceResponseV1::new(price_usd, as_of, expiration)
+}

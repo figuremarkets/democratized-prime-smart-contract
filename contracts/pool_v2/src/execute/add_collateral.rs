@@ -13,8 +13,10 @@ use std::collections::{BTreeMap, HashSet};
 pub const ACTION: &str = "add_collateral";
 
 /// Add collateral to the sender's borrower position. Funds are taken from `info.funds`.
-/// All denoms must be in the pool's supported collateral assets and have a fresh oracle
-/// price; total distinct collateral types (existing + new) cannot exceed
+/// All denoms must be in the pool's supported collateral assets. A **new** denom (not already
+/// in the borrower's map) must have a fresh oracle price; top-ups of an already-held denom
+/// are allowed while that feed is stale so a borrower can defend a liquidatable position
+/// during an outage. Total distinct collateral types (existing + new) cannot exceed
 /// `max_borrower_collateral_types`.
 ///
 /// No minimum add amount is enforced here. Collateral dust does not
@@ -58,15 +60,19 @@ pub fn add_collateral(
         );
     }
 
-    let deposited_denoms: Vec<String> = new_collateral.iter().map(|c| c.denom.clone()).collect();
+    let mut current = get_borrower_collateral(deps.storage, &borrower)?;
+    let new_denoms: Vec<String> = new_collateral
+        .iter()
+        .map(|c| c.denom.clone())
+        .filter(|d| !current.amounts.contains_key(d))
+        .collect();
     require_fresh_asset_prices(
         &deps.querier,
         &env.block.time,
         &contract.price_oracle_address,
-        &deposited_denoms,
+        &new_denoms,
     )?;
 
-    let mut current = get_borrower_collateral(deps.storage, &borrower)?;
     validate_borrower_collateral_type_limit(
         &new_collateral,
         &current,

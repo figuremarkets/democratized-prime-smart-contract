@@ -196,7 +196,8 @@ mod scale_truncation {
             .build_and_store(deps.as_mut().storage);
 
         let result_body: PriceMapResponse = from_json(
-            query_prices_by_assets(&deps.storage, vec![String::from("neth.figure.se")]).unwrap(),
+            query_prices_by_assets(&deps.storage, vec![String::from("neth.figure.se")], false)
+                .unwrap(),
         )
         .unwrap();
         let price = result_body.get("neth.figure.se").unwrap();

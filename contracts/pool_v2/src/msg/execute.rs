@@ -118,6 +118,10 @@ pub enum ExecuteMsg {
         bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
         /// If provided, custodianship will be transferred to the given account.
         custodian: Option<String>,
+        /// Seconds past oracle expiration after which a stored price is unpriceable for
+        /// liquidation. Omitted / JSON `null` = no change. `0` disables last-known prices.
+        #[serde(default)]
+        max_liquidation_staleness_seconds: Option<u64>,
     },
 
     /// Update interest rate params (contract owner only). Full replacement; validated same as at instantiate.

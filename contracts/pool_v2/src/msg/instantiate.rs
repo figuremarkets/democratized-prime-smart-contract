@@ -62,4 +62,8 @@ pub struct InstantiateMsg {
     pub bad_debt_loss_allocation: BadDebtLossAllocation,
     /// The account serving as the custodian of contract operations.
     pub custodian: String,
+    /// Seconds past oracle expiration after which a stored price is unpriceable for
+    /// liquidation. Omitted JSON uses 7 days. `0` disables last-known prices.
+    #[serde(default = "crate::model::contract_state::default_max_liquidation_staleness_seconds")]
+    pub max_liquidation_staleness_seconds: u64,
 }
