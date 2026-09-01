@@ -16,12 +16,17 @@ use democratized_prime_lib::price_oracle::model::PriceMapResponse;
 use result_extensions::ResultExtensions;
 
 /// How a missing or zero collateral price is treated when valuing a position.
+///
+/// Every production caller today passes [`ZeroPricePolicy::TreatAsWorthless`] (Borrow,
+/// RemoveCollateral, Liquidate, queries). [`ZeroPricePolicy::Reject`] has no execute
+/// or query call site; it is kept so write_off (`sc-542885`) or a later path can fail
+/// closed without reintroducing the branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZeroPricePolicy {
-    /// Error on a zero or absent collateral price.
+    /// Error on a zero or absent collateral price. Nothing currently selects this.
     Reject,
-    /// Value the asset at $0. Used for liquidation and for borrow / remove_collateral /
-    /// queries so a dead feed does not freeze the position (the pool simply gives no credit).
+    /// Value the asset at $0 and give it no LTV credit, so a dead feed does not freeze
+    /// the position. Write_off (`sc-542885`) is expected to pass this as well.
     TreatAsWorthless,
 }
 
