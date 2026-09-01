@@ -8,7 +8,7 @@ use crate::model::{Denom, OperationalState, RateParamsV1};
 use crate::tests::query::common::CUSTODIAN;
 use crate::utils::{
     calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_value_usd,
-    get_health_from_ltv, validate_borrower_is_healthy, ZeroPricePolicy,
+    get_health_from_ltv, validate_borrower_is_healthy,
 };
 use cosmwasm_std::{Addr, Decimal256, Uint128};
 use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
@@ -154,13 +154,7 @@ fn total_collateral_value_empty() {
     let collateral = BorrowerCollateralV1::default();
     let prices = PriceMapResponse::new();
     let assets = supported_assets(&[]);
-    let v = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::TreatAsWorthless,
-    )
-    .unwrap();
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
     assert_eq!(v, Decimal256::zero());
 }
 
@@ -171,13 +165,7 @@ fn total_collateral_value_one_asset_full_haircut() {
     let mut prices = PriceMapResponse::new();
     prices.insert("btc".to_string(), price_entry("50000"));
     let assets = supported_assets(&[("btc", Some("1.0"))]);
-    let v = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::TreatAsWorthless,
-    )
-    .unwrap();
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
     assert_eq!(v, Decimal256::from_str("500000").unwrap()); // 10 * 50000
 }
 
@@ -188,13 +176,7 @@ fn total_collateral_value_one_asset_with_haircut() {
     let mut prices = PriceMapResponse::new();
     prices.insert("btc".to_string(), price_entry("50000"));
     let assets = supported_assets(&[("btc", Some("0.80"))]); // 80% haircut
-    let v = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::TreatAsWorthless,
-    )
-    .unwrap();
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
     assert_eq!(v, Decimal256::from_str("400000").unwrap()); // 10 * 50000 * 0.8
 }
 
@@ -206,77 +188,19 @@ fn total_collateral_value_one_asset_no_haircut_set_uses_full_value() {
     let mut prices = PriceMapResponse::new();
     prices.insert("btc".to_string(), price_entry("50000"));
     let assets = supported_assets(&[("btc", None)]); // no haircut
-    let v = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::TreatAsWorthless,
-    )
-    .unwrap();
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
     assert_eq!(v, Decimal256::from_str("500000").unwrap()); // 10 * 50000 * 1.0
 }
 
 #[test]
-fn total_collateral_value_missing_price_errors() {
-    // Pins Reject (no production caller). TreatAsWorthless is covered below.
-    let mut collateral = BorrowerCollateralV1::default();
-    collateral.amounts.insert("btc".to_string(), 10u128);
-    let prices = PriceMapResponse::new();
-    let assets = supported_assets(&[("btc", Some("1.0"))]);
-    let err = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::Reject,
-    )
-    .unwrap_err();
-    match &err {
-        ContractError::NotFoundError { message } => {
-            assert!(message.contains("Price of asset"));
-        }
-        _ => panic!("expected NotFoundError, got {:?}", err),
-    }
-}
-
-#[test]
-fn total_collateral_value_zero_price_errors() {
-    // Pins Reject (no production caller). TreatAsWorthless is covered below.
-    let mut collateral = BorrowerCollateralV1::default();
-    collateral.amounts.insert("btc".to_string(), 10u128);
-    let mut prices = PriceMapResponse::new();
-    prices.insert("btc".to_string(), price_entry("0"));
-    let assets = supported_assets(&[("btc", Some("1.0"))]);
-    let err = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::Reject,
-    )
-    .unwrap_err();
-    match &err {
-        ContractError::IllegalArgumentError { message } => {
-            assert!(message.contains("Collateral price is zero"));
-            assert!(message.contains("btc"));
-        }
-        _ => panic!("expected IllegalArgumentError, got {:?}", err),
-    }
-}
-
-#[test]
-fn total_collateral_value_treat_as_worthless_skips_missing_and_zero() {
+fn total_collateral_value_skips_missing_and_zero() {
     let mut collateral = BorrowerCollateralV1::default();
     collateral.amounts.insert("btc".to_string(), 10u128);
     collateral.amounts.insert("eth".to_string(), 2u128);
     let mut prices = PriceMapResponse::new();
     prices.insert("eth".to_string(), price_entry("0"));
     let assets = supported_assets(&[("btc", Some("1.0")), ("eth", Some("1.0"))]);
-    let v = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::TreatAsWorthless,
-    )
-    .unwrap();
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
     assert_eq!(v, Decimal256::zero());
 }
 
@@ -301,13 +225,7 @@ fn total_collateral_value_uses_display_and_precision() {
         },
     );
     let assets = supported_assets(&[("eth", Some("1.0"))]);
-    let v = calculate_total_collateral_value_usd(
-        &collateral,
-        &prices,
-        &assets,
-        ZeroPricePolicy::TreatAsWorthless,
-    )
-    .unwrap();
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
     assert_eq!(v, Decimal256::from_str("0.5").unwrap());
 }
 
@@ -325,7 +243,6 @@ fn ltv_zero_debt_zero_collateral() {
         &prices,
         &collateral,
         Uint128::zero(),
-        ZeroPricePolicy::TreatAsWorthless,
     )
     .unwrap();
     assert_eq!(ltv, Decimal256::zero());
@@ -343,7 +260,6 @@ fn ltv_no_collateral_with_debt_errors() {
         &prices,
         &collateral,
         Uint128::new(100),
-        ZeroPricePolicy::TreatAsWorthless,
     )
     .unwrap_err();
     match &err {
@@ -368,7 +284,6 @@ fn ltv_ratio_correct() {
         &prices,
         &collateral,
         Uint128::new(500),
-        ZeroPricePolicy::TreatAsWorthless,
     )
     .unwrap();
     // debt usd = 500 * 1 = 500, collateral usd = 1000, ltv = 0.5

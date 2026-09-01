@@ -36,7 +36,7 @@ use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_borrow_value_usd,
     calculate_total_collateral_value_usd, get_asset_prices_for_liquidation, get_borrower_health,
     scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
-    validate_single_coin_denom, WithRates, ZeroPricePolicy,
+    validate_single_coin_denom, WithRates,
 };
 use cosmwasm_std::{
     ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
@@ -105,7 +105,6 @@ pub fn liquidate(
         asset_prices,
         &borrower_collateral,
         Uint128::from(debt_underlying),
-        ZeroPricePolicy::TreatAsWorthless,
     )?;
     ensure!(
         health == BorrowerHealthV1::Liquidatable,
@@ -124,7 +123,6 @@ pub fn liquidate(
         &borrower_collateral,
         asset_prices,
         &contract.supported_collateral_assets,
-        ZeroPricePolicy::TreatAsWorthless,
     )?;
 
     let one = Decimal256::one();

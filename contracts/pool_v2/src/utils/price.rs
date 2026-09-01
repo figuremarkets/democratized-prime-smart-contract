@@ -32,8 +32,7 @@ pub fn get_price_from_oracle(
 
 /// Returns prices for the lending denom and collateral denoms that have a **fresh** stored price.
 /// The lending denom must be present and fresh. Missing or stale collateral is omitted so callers
-/// can value it at $0 ([`crate::utils::health::ZeroPricePolicy::TreatAsWorthless`]) instead of
-/// freezing the borrower.
+/// can value it at $0 instead of freezing the borrower.
 pub fn get_asset_prices_for_borrower(
     querier: &QuerierWrapper,
     block_time: &Timestamp,
@@ -55,7 +54,7 @@ pub fn get_asset_prices_for_borrower(
 }
 
 /// Errors if the lending denom is missing or stale; removes stale/zero collateral
-/// entries so callers can apply TreatAsWorthless.
+/// entries so they contribute $0 to LTV.
 pub fn drop_unpriceable_collateral(
     prices: &mut PriceMapResponse,
     lending_denom: &str,

@@ -9,7 +9,7 @@ use crate::storage::{
 use crate::utils::{
     get_asset_prices_for_borrower, get_borrower_health, reserve_totals_and_cash_u128,
     scaled_to_underlying_borrow, underlying_to_scaled_borrow_ceil, update_reserve_indexes,
-    validate_borrower_attrs, validate_borrower_is_healthy, WithRates, ZeroPricePolicy,
+    validate_borrower_attrs, validate_borrower_is_healthy, WithRates,
 };
 use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 
@@ -85,7 +85,6 @@ pub fn borrow(
         &asset_prices,
         &borrower_collateral,
         debt_after,
-        ZeroPricePolicy::TreatAsWorthless,
     )?;
     validate_borrower_is_healthy(health, loan_to_value, &contract)?;
 

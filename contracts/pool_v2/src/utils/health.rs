@@ -3,6 +3,9 @@
 //! USD notionals use the oracle's `display_price_usd` and `precision`:
 //! `display_price_usd × amount / 10^precision`. Collateral then applies haircut.
 //! Do not multiply the deprecated scaled `price_usd` field by amount.
+//!
+//! Missing or zero collateral prices contribute $0 so a dead feed does not freeze the
+//! position. The lending denom still requires a usable price.
 
 use crate::model::collateral::BorrowerCollateralV1;
 use crate::model::collateral::CollateralAssetV1;
@@ -15,21 +18,6 @@ use cosmwasm_std::{ensure, Decimal256, Uint128};
 use democratized_prime_lib::price_oracle::model::PriceMapResponse;
 use result_extensions::ResultExtensions;
 
-/// How a missing or zero collateral price is treated when valuing a position.
-///
-/// Every production caller today passes [`ZeroPricePolicy::TreatAsWorthless`] (Borrow,
-/// RemoveCollateral, Liquidate, queries). [`ZeroPricePolicy::Reject`] has no execute
-/// or query call site; it is kept so write_off (`sc-542885`) or a later path can fail
-/// closed without reintroducing the branch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ZeroPricePolicy {
-    /// Error on a zero or absent collateral price. Nothing currently selects this.
-    Reject,
-    /// Value the asset at $0 and give it no LTV credit, so a dead feed does not freeze
-    /// the position. Write_off (`sc-542885`) is expected to pass this as well.
-    TreatAsWorthless,
-}
-
 /// Computes health state and LTV for a borrower given collateral, prices, and debt (underlying amount).
 pub fn get_borrower_health(
     contract_state: &ContractStateV1,
@@ -37,7 +25,6 @@ pub fn get_borrower_health(
     asset_prices: &PriceMapResponse,
     borrower_collateral: &BorrowerCollateralV1,
     underlying_debt: Uint128,
-    zero_price_policy: ZeroPricePolicy,
 ) -> Result<(BorrowerHealthV1, Decimal256), ContractError> {
     let loan_to_value = calculate_ltv(
         contract_state,
@@ -45,7 +32,6 @@ pub fn get_borrower_health(
         asset_prices,
         borrower_collateral,
         underlying_debt,
-        zero_price_policy,
     )?;
     let health = get_health_from_ltv(contract_state, loan_to_value)?;
     (health, loan_to_value).to_ok()
@@ -72,27 +58,21 @@ pub fn calculate_ltv(
     asset_prices: &PriceMapResponse,
     borrower_collateral: &BorrowerCollateralV1,
     underlying_debt: Uint128,
-    zero_price_policy: ZeroPricePolicy,
 ) -> Result<Decimal256, ContractError> {
     let borrow_balance_usd = calculate_borrow_value_usd(
         underlying_debt,
         &contract_state.lending_denom.name,
         asset_prices,
     )?;
-    let total_collateral_value_usd = calculate_total_collateral_value_usd(
-        borrower_collateral,
-        asset_prices,
-        supported_assets,
-        zero_price_policy,
-    )?;
+    let total_collateral_value_usd =
+        calculate_total_collateral_value_usd(borrower_collateral, asset_prices, supported_assets)?;
 
     if borrow_balance_usd.is_zero() && total_collateral_value_usd.is_zero() {
         return Decimal256::zero().to_ok();
     }
     if total_collateral_value_usd.is_zero() {
         // TODO(sc-542885): return Decimal256::one() so an all-unpriceable bag with debt is
-        // Liquidatable (needed by write_off under TreatAsWorthless). Borrow/RemoveCollateral
-        // fail closed either way.
+        // Liquidatable (needed by write_off). Borrow/RemoveCollateral fail closed either way.
         return illegal_argument(format!(
             "No collateral for loans [debt value {}]",
             borrow_balance_usd
@@ -105,32 +85,19 @@ pub fn calculate_ltv(
         .map_err(ContractError::from)
 }
 
+/// Haircutted collateral USD. Missing or zero prices are skipped (no LTV credit).
 pub fn calculate_total_collateral_value_usd(
     collateral: &BorrowerCollateralV1,
     prices: &PriceMapResponse,
     supported_assets: &[CollateralAssetV1],
-    zero_price_policy: ZeroPricePolicy,
 ) -> Result<Decimal256, ContractError> {
     let mut total = Decimal256::zero();
     for (asset_id, amount) in collateral.amounts.iter() {
-        let price = match prices.get(asset_id) {
-            Some(p) => p,
-            None => match zero_price_policy {
-                ZeroPricePolicy::Reject => {
-                    return Err(not_found(format!("Price of asset: {}", asset_id)));
-                }
-                ZeroPricePolicy::TreatAsWorthless => continue,
-            },
+        let Some(price) = prices.get(asset_id) else {
+            continue;
         };
         if price.is_zero_price() {
-            match zero_price_policy {
-                ZeroPricePolicy::Reject => {
-                    return Err(illegal_argument(format!(
-                        "Collateral price is zero: {asset_id}"
-                    )));
-                }
-                ZeroPricePolicy::TreatAsWorthless => continue,
-            }
+            continue;
         }
         let haircut = haircut_percentage(supported_assets, asset_id);
         let value = price

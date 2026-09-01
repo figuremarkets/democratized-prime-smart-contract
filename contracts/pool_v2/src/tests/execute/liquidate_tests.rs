@@ -23,7 +23,7 @@ use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
     compute_effective_reserve, get_asset_prices_for_borrower, get_borrower_health,
-    scaled_to_underlying_borrow, ZeroPricePolicy,
+    scaled_to_underlying_borrow,
 };
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -564,7 +564,6 @@ fn liquidate_healthy_borrower_fails() {
         &asset_prices,
         &collateral,
         Uint128::from(debt),
-        ZeroPricePolicy::TreatAsWorthless,
     )
     .unwrap();
     assert_eq!(health, BorrowerHealthV1::Liquidatable);

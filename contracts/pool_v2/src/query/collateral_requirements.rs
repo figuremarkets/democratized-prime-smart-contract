@@ -8,7 +8,7 @@ use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
 use crate::model::{haircut_percentage, CollateralRequirementsResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
-use crate::utils::health::{calculate_total_collateral_value_usd, ZeroPricePolicy};
+use crate::utils::health::calculate_total_collateral_value_usd;
 use crate::utils::{
     calculate_borrow_value_usd, compute_effective_reserve, drop_unpriceable_collateral,
     get_price_from_oracle, scaled_to_underlying_borrow,
@@ -104,7 +104,6 @@ pub fn query_collateral_requirements(
             bc,
             &prices,
             &contract.supported_collateral_assets,
-            ZeroPricePolicy::TreatAsWorthless,
         )
         .map_err(QueryError::Contract)?;
         required_collateral_value_usd
