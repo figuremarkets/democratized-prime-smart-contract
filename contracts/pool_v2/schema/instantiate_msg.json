@@ -87,8 +87,8 @@
       "minimum": 0.0
     },
     "max_liquidation_staleness_seconds": {
-      "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted JSON uses 7 days. `0` disables last-known prices.",
-      "default": 604800,
+      "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted JSON uses 24 hours (capped at 7 days). `0` disables last-known prices.",
+      "default": 86400,
       "type": "integer",
       "format": "uint64",
       "minimum": 0.0

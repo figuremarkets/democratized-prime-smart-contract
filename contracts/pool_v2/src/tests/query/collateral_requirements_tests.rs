@@ -392,6 +392,71 @@ fn get_collateral_requirements_fails_when_oracle_returns_stale_price() {
     }
 }
 
+#[test]
+fn get_collateral_requirements_is_not_quotable_when_requested_collateral_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: None,
+            new_loan_amount: Uint128::new(1000),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("stale requested collateral should be unquotable, not a query error");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    // amount 0 currently means both “need none” and “cannot quote” (AddCollateral of a
+    // new denom still requires a fresh price). Follow-up: AssetRequirementV1.satisfiable.
+    assert!(resp.required[0].amount.is_zero());
+}
+
+#[test]
+fn get_collateral_requirements_succeeds_when_held_collateral_price_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 10u128);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .expect("set borrower collateral");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: Some(SOME_USER.to_string()),
+            new_loan_amount: Uint128::zero(),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("stale held collateral must not fail the requirements query");
+}
+
 /// 18-decimal collateral at $1e-18: required base units exceed u128. Query still
 /// returns (amount 0 = no finite representable amount), rather than erroring wholesale.
 #[test]

@@ -28,7 +28,7 @@ fn get_state_returns_contract_and_effective_reserve() {
     assert_eq!(state.total_collateral_held.len(), 1);
     assert_eq!(state.total_collateral_held[0].asset_id, "asset.one");
     assert_eq!(state.total_collateral_held[0].amount, Uint128::zero());
-    assert_eq!(state.contract.max_liquidation_staleness_seconds, 604800);
+    assert_eq!(state.contract.max_liquidation_staleness_seconds, 86400);
     let reserve = ReserveStateV1::from(state.reserve);
     assert_eq!(reserve.total_scaled_liquidity, 0);
     assert_eq!(reserve.total_scaled_borrow, 0);

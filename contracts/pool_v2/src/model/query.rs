@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
+/// Per-asset amount in GetCollateralRequirements / GetBorrowerPosition.
+///
+/// `amount == 0` currently means both “need none” and “cannot quote” (stale/missing
+/// feed, zero haircut, or [`crate::model::error::ContractError::AmountNotRepresentable`]).
+/// Follow-up: add `satisfiable: bool` so clients can tell those apart.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct AssetRequirementV1 {
     pub asset_id: String,

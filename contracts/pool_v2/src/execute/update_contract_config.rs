@@ -9,7 +9,7 @@
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
-use crate::model::BadDebtLossAllocation;
+use crate::model::{BadDebtLossAllocation, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
 use crate::utils::assert_custodian;
 use cosmwasm_std::{ensure, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128};
@@ -163,6 +163,10 @@ pub fn update_contract_config(
         illegal_argument(
             "liquidation_bonus_rate * margin_rate must be < 1 (otherwise liquidations are impossible)"
         )
+    );
+    ensure!(
+        contract.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+        illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
 
     set_contract_state_v1(deps.storage, &contract)?;

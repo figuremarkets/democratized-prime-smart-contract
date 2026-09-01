@@ -50,35 +50,36 @@ pub fn get_asset_prices_for_borrower(
         &asset_ids,
         true,
     )?;
+    drop_unpriceable_collateral(&mut price_data, lending_denom, block_time)?;
+    Ok(price_data)
+}
 
-    let lending_price = price_data
+/// Errors if the lending denom is missing or stale; removes stale/zero collateral
+/// entries so callers can apply TreatAsWorthless.
+pub fn drop_unpriceable_collateral(
+    prices: &mut PriceMapResponse,
+    lending_denom: &str,
+    block_time: &Timestamp,
+) -> Result<(), ContractError> {
+    let lending_price = prices
         .get(lending_denom)
         .ok_or_else(|| not_found(format!("Price of asset: {}", lending_denom)))?;
     if lending_price.is_stale(*block_time) {
         return Err(ContractError::StalePriceDataError {
-            asset_id: lending_denom.clone(),
+            asset_id: lending_denom.to_string(),
             expired_at: lending_price.expired_at(),
         });
     }
 
-    let mut drop: Vec<String> = Vec::new();
-    for asset_id in borrower_collateral.amounts.keys() {
-        if asset_id == lending_denom {
-            continue;
-        }
-        match price_data.get(asset_id) {
-            None => {}
-            Some(p) if p.is_stale(*block_time) || p.is_zero_price() => {
-                drop.push(asset_id.clone());
-            }
-            Some(_) => {}
-        }
-    }
+    let drop: Vec<String> = prices
+        .iter()
+        .filter(|(id, p)| *id != lending_denom && (p.is_stale(*block_time) || p.is_zero_price()))
+        .map(|(id, _)| id.clone())
+        .collect();
     for asset_id in drop {
-        price_data.remove(&asset_id);
+        prices.remove(&asset_id);
     }
-
-    Ok(price_data)
+    Ok(())
 }
 
 /// Ensures each listed asset has a stored oracle price that is not stale.

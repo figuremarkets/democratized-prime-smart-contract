@@ -379,7 +379,7 @@
               "minimum": 0.0
             },
             "max_liquidation_staleness_seconds": {
-              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known prices.",
+              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].",
               "default": null,
               "type": [
                 "integer",

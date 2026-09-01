@@ -3,7 +3,9 @@ use crate::constants::{
     MAX_LENDER_BORROWER_REQUIRED_ATTRS, REPO_TOKEN_INSTANTIATE_REPLY_ID,
 };
 use crate::model::error::{illegal_argument, ContractError};
-use crate::model::{ContractStateV1, OperationalState, ReserveStateV1};
+use crate::model::{
+    ContractStateV1, OperationalState, ReserveStateV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+};
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{set_contract_state_v1, set_reserve_state_v1};
 use cosmwasm_std::{
@@ -142,6 +144,10 @@ pub fn instantiate_contract(
     ensure!(
         msg.max_borrower_collateral_types > 0,
         illegal_argument("max_borrower_collateral_types must be at least 1")
+    );
+    ensure!(
+        msg.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+        illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
     ensure!(
         msg.lender_required_attrs.len() <= MAX_LENDER_BORROWER_REQUIRED_ATTRS,
