@@ -36,6 +36,10 @@ pub struct AssetPriceResponseV1 {
     pub expiration_epoch_seconds: u64,
 }
 
+fn overflow(msg: &str) -> ContractError {
+    ContractError::Overflow(msg.to_string())
+}
+
 impl AssetPriceResponseV1 {
     /// Identity-mapped price: display USD is already per-base-unit (precision 0).
     /// Still fills deprecated [`Self::price_usd`] for older clients.
@@ -78,41 +82,67 @@ impl AssetPriceResponseV1 {
     ///
     /// Computed in integer atomics so a cheap display price at high precision does not
     /// floor to zero the way multiplying deprecated [`Self::price_usd`] by amount does.
+    ///
+    /// `display × amount` overflows [`Decimal256`] only above ~1.16e59 (about $1.16e41
+    /// notional at precision 18). That is far beyond realistic supplies; it is reported
+    /// as [`ContractError::Overflow`].
     pub fn value_usd(&self, amount: u128) -> Result<Decimal256, ContractError> {
         let (display, precision) = self.valuation_inputs();
         if amount == 0 {
             return Ok(Decimal256::zero());
         }
         ensure!(!display.is_zero(), illegal_argument("Asset price is zero"));
-        let numerator = display.atomics().checked_mul(Uint256::from(amount))?;
+        let numerator = display
+            .atomics()
+            .checked_mul(Uint256::from(amount))
+            .map_err(|_| overflow("USD notional overflow"))?;
         let exp = Decimal256::DECIMAL_PLACES
             .checked_add(precision)
-            .ok_or_else(|| illegal_argument("Price precision overflow"))?;
-        let denominator = Uint256::from(10u64).checked_pow(exp)?;
-        Decimal256::checked_from_ratio(numerator, denominator).map_err(Into::into)
+            .ok_or_else(|| overflow("Price precision overflow"))?;
+        let denominator = Uint256::from(10u64)
+            .checked_pow(exp)
+            .map_err(|_| overflow("Price precision overflow"))?;
+        Decimal256::checked_from_ratio(numerator, denominator)
+            .map_err(|_| overflow("USD notional overflow"))
     }
 
     /// Ceil of the base-unit amount whose notional is at least `value` USD:
     /// `ceil(value * 10^precision / display_price_usd)`.
+    ///
+    /// Intermediate `value.atomics() × 10^precision` overflow is the same ~1.16e59
+    /// class as [`Self::value_usd`] and is [`ContractError::Overflow`]. A result that
+    /// is finite but larger than [`u128::MAX`] is [`ContractError::AmountNotRepresentable`]
+    /// (reachable for a cheap 18-decimal asset).
     pub fn amount_from_usd(&self, value: Decimal256) -> Result<u128, ContractError> {
         let (display, precision) = self.valuation_inputs();
         if value.is_zero() {
             return Ok(0);
         }
         ensure!(!display.is_zero(), illegal_argument("Asset price is zero"));
-        let scale = Uint256::from(10u64).checked_pow(precision)?;
-        let numerator = value.atomics().checked_mul(scale)?;
+        let scale = Uint256::from(10u64)
+            .checked_pow(precision)
+            .map_err(|_| overflow("Price precision overflow"))?;
+        let numerator = value
+            .atomics()
+            .checked_mul(scale)
+            .map_err(|_| overflow("amount from USD overflow"))?;
         let denominator = display.atomics();
-        let quot = numerator.checked_div(denominator)?;
-        let rem = numerator.checked_rem(denominator)?;
+        // Non-zero Decimal256 always has non-zero atomics (ensure above).
+        let quot = numerator
+            .checked_div(denominator)
+            .expect("display non-zero so atomics non-zero");
+        let rem = numerator
+            .checked_rem(denominator)
+            .expect("display non-zero so atomics non-zero");
         let ceil = if rem.is_zero() {
             quot
         } else {
-            quot.checked_add(Uint256::one())?
+            quot.checked_add(Uint256::one())
+                .map_err(|_| ContractError::AmountNotRepresentable)?
         };
         Uint128::try_from(ceil)
             .map(|u| u.u128())
-            .map_err(Into::into)
+            .map_err(|_| ContractError::AmountNotRepresentable)
     }
 
     /// Tests if the price is considered stale by comparing the current time
@@ -135,6 +165,7 @@ pub type PriceMapResponse = HashMap<String, AssetPriceResponseV1>;
 #[allow(deprecated)]
 mod tests {
     use super::*;
+    use crate::common::ContractError;
     use std::str::FromStr;
 
     fn dec(s: &str) -> Decimal256 {
@@ -194,5 +225,49 @@ mod tests {
         assert!(p.display_price_usd.is_zero());
         assert_eq!(p.precision, 0);
         assert_eq!(p.value_usd(2).unwrap(), dec("3"));
+    }
+
+    #[test]
+    fn value_usd_overflow_is_overflow_error() {
+        let p = AssetPriceResponseV1::new(Decimal256::MAX, 0, 1);
+        let err = p.value_usd(u128::MAX).unwrap_err();
+        match err {
+            ContractError::Overflow(message) => {
+                assert!(message.contains("overflow"), "{}", message);
+            }
+            other => panic!("expected Overflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn amount_from_usd_exceeding_u128_errors() {
+        // 18-decimal token at $1e-18: $1000 requires 1e39 base units > u128::MAX.
+        let p = AssetPriceResponseV1 {
+            price_usd: Decimal256::zero(),
+            display_price_usd: Decimal256::from_ratio(1u128, 1_000_000_000_000_000_000u128),
+            precision: 18,
+            as_of_epoch_second: 0,
+            expiration_epoch_seconds: 1,
+        };
+        let err = p.amount_from_usd(dec("1000")).unwrap_err();
+        assert_eq!(err, ContractError::AmountNotRepresentable);
+    }
+
+    #[test]
+    fn amount_from_usd_mul_overflows() {
+        let p = AssetPriceResponseV1 {
+            price_usd: Decimal256::zero(),
+            display_price_usd: Decimal256::one(),
+            precision: 18,
+            as_of_epoch_second: 0,
+            expiration_epoch_seconds: 1,
+        };
+        let err = p.amount_from_usd(Decimal256::MAX).unwrap_err();
+        match err {
+            ContractError::Overflow(message) => {
+                assert!(message.contains("overflow"), "{}", message);
+            }
+            other => panic!("expected Overflow, got {:?}", other),
+        }
     }
 }

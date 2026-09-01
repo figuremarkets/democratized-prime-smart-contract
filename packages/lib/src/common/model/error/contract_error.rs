@@ -31,6 +31,10 @@ pub enum ContractError {
     #[error("Overflow or invalid conversion: {0}")]
     Overflow(String),
 
+    /// Ceil amount from a USD notional does not fit in `u128` (cheap high-precision asset).
+    #[error("Required amount exceeds u128")]
+    AmountNotRepresentable,
+
     #[error("{0}")]
     OverFlowError(#[from] OverflowError),
 

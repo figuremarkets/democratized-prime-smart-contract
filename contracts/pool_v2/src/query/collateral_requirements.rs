@@ -131,11 +131,13 @@ pub fn query_collateral_requirements(
             let pre_haircut = value_to_cover
                 .checked_div(haircut)
                 .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
-            Uint128::from(
-                price
-                    .amount_from_usd(pre_haircut)
-                    .map_err(QueryError::Contract)?,
-            )
+            match price.amount_from_usd(pre_haircut) {
+                Ok(amt) => Uint128::from(amt),
+                // Cheap high-precision asset: required base units do not fit u128.
+                // Same as zero-price: no finite representable amount satisfies.
+                Err(ContractError::AmountNotRepresentable) => Uint128::zero(),
+                Err(e) => return Err(QueryError::Contract(e)),
+            }
         };
         required.push(AssetRequirementV1 {
             asset_id: asset_id.clone(),
