@@ -525,6 +525,9 @@ fn remove_collateral_fails_would_be_unhealthy() {
     }
 }
 
+/// Invariant: RemoveCollateral cannot empty the map while debt remains (health check
+/// rejects LTV 1 / Liquidatable). Together with full-seizure liquidation zeroing
+/// `scaled_borrow`, empty-map + residual debt is unreachable.
 #[test]
 fn remove_collateral_fails_remove_all_with_debt() {
     let (mut deps, env) = setup_collateral_with_debt();
@@ -541,7 +544,7 @@ fn remove_collateral_fails_remove_all_with_debt() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(
-                message.contains("No collateral for loans"),
+                message.contains("Loan-to-value") || message.contains("No collateral for loans"),
                 "message: {}",
                 message
             );
