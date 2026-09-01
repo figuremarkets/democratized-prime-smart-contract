@@ -10,8 +10,8 @@ use crate::model::{haircut_percentage, CollateralRequirementsResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
 use crate::utils::health::{calculate_total_collateral_value_usd, ZeroPricePolicy};
 use crate::utils::{
-    calculate_borrow_value_usd, compute_effective_reserve, get_price_from_oracle,
-    scaled_to_underlying_borrow,
+    calculate_borrow_value_usd, compute_effective_reserve, drop_unpriceable_collateral,
+    get_price_from_oracle, scaled_to_underlying_borrow,
 };
 use cosmwasm_std::{to_json_binary, Binary, Decimal256, Deps, Env, Uint128};
 
@@ -59,24 +59,15 @@ pub fn query_collateral_requirements(
             }
         }
     }
-    let prices = get_price_from_oracle(
+    let mut prices = get_price_from_oracle(
         &deps.querier,
         &contract.price_oracle_address,
         &asset_ids,
         true,
     )
     .map_err(QueryError::Contract)?;
-
-    // Present-and-stale still errors; missing prices are omitted (skip_missing) and valued at $0.
-    for (asset_id, price) in prices.iter() {
-        if price.is_stale(env.block.time) {
-            return Err(ContractError::StalePriceDataError {
-                asset_id: asset_id.clone(),
-                expired_at: price.expired_at(),
-            }
-            .into());
-        }
-    }
+    drop_unpriceable_collateral(&mut prices, &contract.lending_denom.name, &env.block.time)
+        .map_err(QueryError::Contract)?;
 
     let new_loan_value_usd =
         calculate_borrow_value_usd(new_loan_amount, &contract.lending_denom.name, &prices)
@@ -127,7 +118,7 @@ pub fn query_collateral_requirements(
     for asset_id in collateral_assets {
         let haircut = haircut_percentage(&contract.supported_collateral_assets, asset_id);
         let amount = match prices.get(asset_id) {
-            None => Uint128::zero(),
+            None => Uint128::zero(), // unquotable (stale/missing); same 0 as “need none” until satisfiable: bool
             Some(price) if price.is_zero_price() || haircut.is_zero() => {
                 // Asset has zero value per unit (e.g. price or haircut is 0); no finite amount satisfies. Preserve 1:1 with collateral_assets.
                 Uint128::zero()

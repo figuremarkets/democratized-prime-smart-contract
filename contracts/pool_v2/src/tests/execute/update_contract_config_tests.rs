@@ -9,6 +9,7 @@ use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{
     BadDebtLossAllocation, CollateralAssetV1, Denom, OperationalState, RateParamsV1,
+    MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1};
@@ -46,7 +47,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
-        max_liquidation_staleness_seconds: 604800,
+        max_liquidation_staleness_seconds: 86400,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128),
@@ -125,7 +126,7 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
             min_lend: None,
             min_borrow: None,
             max_borrower_collateral_types: None,
-            max_liquidation_staleness_seconds: Some(86_400),
+            max_liquidation_staleness_seconds: Some(3_600),
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -134,7 +135,39 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
     .expect("update_contract_config should succeed");
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(contract.max_liquidation_staleness_seconds, 86_400);
+    assert_eq!(contract.max_liquidation_staleness_seconds, 3_600);
+}
+
+#[test]
+fn update_contract_config_fails_max_liquidation_staleness_exceeds_maximum() {
+    let (mut deps, env) = setup_instantiated();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS + 1),
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("max_liquidation_staleness_seconds exceeds maximum"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
 }
 
 // --- bad_debt_loss_allocation (deficit must be zero to change mode) ---

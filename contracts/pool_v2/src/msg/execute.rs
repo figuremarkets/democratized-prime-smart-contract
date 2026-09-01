@@ -119,7 +119,8 @@ pub enum ExecuteMsg {
         /// If provided, custodianship will be transferred to the given account.
         custodian: Option<String>,
         /// Seconds past oracle expiration after which a stored price is unpriceable for
-        /// liquidation. Omitted / JSON `null` = no change. `0` disables last-known prices.
+        /// liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be
+        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
         #[serde(default)]
         max_liquidation_staleness_seconds: Option<u64>,
     },

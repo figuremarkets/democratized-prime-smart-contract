@@ -85,6 +85,9 @@ pub fn calculate_ltv(
         return Decimal256::zero().to_ok();
     }
     if total_collateral_value_usd.is_zero() {
+        // TODO(sc-542885): return Decimal256::one() so an all-unpriceable bag with debt is
+        // Liquidatable (needed by write_off under TreatAsWorthless). Borrow/RemoveCollateral
+        // fail closed either way.
         return illegal_argument(format!(
             "No collateral for loans [debt value {}]",
             borrow_balance_usd

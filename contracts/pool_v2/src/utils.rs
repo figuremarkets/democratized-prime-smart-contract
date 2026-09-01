@@ -14,8 +14,8 @@ pub use health::{
 pub use math::{format_as_percent_string, uint128_to_decimal256};
 pub use permission::{assert_custodian, assert_owner_or_custodian};
 pub use price::{
-    get_asset_prices_for_borrower, get_asset_prices_for_liquidation, get_price_from_oracle,
-    require_fresh_asset_prices, LiquidationPrices,
+    drop_unpriceable_collateral, get_asset_prices_for_borrower, get_asset_prices_for_liquidation,
+    get_price_from_oracle, require_fresh_asset_prices, LiquidationPrices,
 };
 pub use rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization,
