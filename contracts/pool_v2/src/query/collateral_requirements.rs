@@ -3,6 +3,7 @@
 //! Returns required collateral value (USD, after haircuts) and per-asset minimum amounts.
 //! When `borrower` is set: existing debt is included in the required total, and existing
 //! collateral is subtracted so per-asset amounts are the *additional* collateral needed.
+//! Per-asset `satisfiable` is false when a positive requirement could not be quoted.
 
 use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
@@ -33,10 +34,7 @@ pub fn query_collateral_requirements(
             additional_collateral_value_usd: "0".to_string(),
             required: collateral_assets
                 .iter()
-                .map(|id| AssetRequirementV1 {
-                    asset_id: id.clone(),
-                    amount: Uint128::zero(),
-                })
+                .map(|id| AssetRequirementV1::quoted(id.clone(), Uint128::zero()))
                 .collect(),
         })
         .map_err(QueryError::Std);
@@ -115,12 +113,19 @@ pub fn query_collateral_requirements(
 
     let mut required: Vec<AssetRequirementV1> = Vec::with_capacity(collateral_assets.len());
     for asset_id in collateral_assets {
+        // Need none of every asset — a missing feed is not a failed quote.
+        if value_to_cover.is_zero() {
+            required.push(AssetRequirementV1::quoted(
+                asset_id.clone(),
+                Uint128::zero(),
+            ));
+            continue;
+        }
         let haircut = haircut_percentage(&contract.supported_collateral_assets, asset_id);
-        let amount = match prices.get(asset_id) {
-            None => Uint128::zero(), // unquotable (stale/missing); same 0 as “need none” until satisfiable: bool
+        let req = match prices.get(asset_id) {
+            None => AssetRequirementV1::unquotable(asset_id.clone()),
             Some(price) if price.is_zero_price() || haircut.is_zero() => {
-                // Asset has zero value per unit (e.g. price or haircut is 0); no finite amount satisfies. Preserve 1:1 with collateral_assets.
-                Uint128::zero()
+                AssetRequirementV1::unquotable(asset_id.clone())
             }
             Some(price) => {
                 // units * (display / 10^precision) * haircut >= value_to_cover
@@ -128,18 +133,16 @@ pub fn query_collateral_requirements(
                     .checked_div(haircut)
                     .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
                 match price.amount_from_usd(pre_haircut) {
-                    Ok(amt) => Uint128::from(amt),
+                    Ok(amt) => AssetRequirementV1::quoted(asset_id.clone(), Uint128::from(amt)),
                     // Cheap high-precision asset: required base units do not fit u128.
-                    // Same as zero-price: no finite representable amount satisfies.
-                    Err(ContractError::AmountNotRepresentable) => Uint128::zero(),
+                    Err(ContractError::AmountNotRepresentable) => {
+                        AssetRequirementV1::unquotable(asset_id.clone())
+                    }
                     Err(e) => return Err(QueryError::Contract(e)),
                 }
             }
         };
-        required.push(AssetRequirementV1 {
-            asset_id: asset_id.clone(),
-            amount,
-        });
+        required.push(req);
     }
 
     to_json_binary(&CollateralRequirementsResponseV1 {

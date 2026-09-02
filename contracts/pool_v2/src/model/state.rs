@@ -12,6 +12,6 @@ pub struct StateResponseV1 {
     pub reserve: ReserveStateResponseV1,
     /// Supported collateral assets: asset_id and haircut (e.g. 0.8 = 80% of price counts toward LTV). Used for AddCollateral, LTV, liquidation.
     pub supported_collateral: Vec<CollateralAssetV1>,
-    /// Total amount of each collateral asset currently held in the pool (sum across all borrowers). Same order as supported_collateral; amount 0 if none held.
+    /// Total amount of each collateral asset currently held in the pool (sum across all borrowers). Same order as supported_collateral; amount 0 if none held. `satisfiable` is always true.
     pub total_collateral_held: Vec<AssetRequirementV1>,
 }

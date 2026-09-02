@@ -7,7 +7,7 @@ use crate::msg::QueryMsg;
 use crate::storage::{
     get_reserve_state_v1, set_borrower_collateral, set_reserve_state_v1, set_scaled_borrow,
 };
-use crate::tests::fixtures::stale_oracle_price;
+use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
 use crate::tests::query::common::{setup_instantiated, ORACLE, SOME_USER};
 use cosmwasm_std::{
     from_json, to_json_binary, ContractResult, Decimal256, QuerierResult, SystemError,
@@ -73,6 +73,7 @@ fn get_borrower_position_zero_when_no_borrow() {
     assert_eq!(res["collateral_value_usd"].as_str(), Some("0"));
     assert_eq!(res["loan_to_value"].as_str(), Some("0"));
     assert_eq!(res["health"].as_str(), Some("healthy"));
+    assert!(res["unpriceable_collateral"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -105,6 +106,7 @@ fn get_borrower_position_returns_scaled_and_underlying() {
     assert_eq!(res["underlying_debt_display"].as_str(), Some("1.050000"));
     assert!(res["collateral"].as_array().unwrap().is_empty());
     assert_eq!(res["health"].as_str(), Some("no_collateral"));
+    assert!(res["unpriceable_collateral"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -166,4 +168,62 @@ fn get_borrower_position_fails_when_oracle_returns_stale_price() {
             err
         ),
     }
+}
+
+/// Stale/missing collateral no longer fails the query. Those denoms stay in `collateral`
+/// and are named in `unpriceable_collateral`; only priced assets contribute to USD/LTV.
+#[test]
+fn get_borrower_position_lists_unpriceable_collateral_omitted_from_usd() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = std::collections::BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 10u128);
+    amounts.insert("asset.two".to_string(), 10u128);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .expect("set borrower collateral");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.two".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetBorrowerPosition {
+            address: SOME_USER.to_string(),
+        },
+    )
+    .expect("query should succeed when only some collateral is stale");
+    let res: serde_json::Value = from_json(bin).expect("decode GetBorrowerPosition response");
+
+    let coll = res["collateral"].as_array().unwrap();
+    assert_eq!(coll.len(), 2);
+    let by_id = |id: &str| {
+        coll.iter()
+            .find(|c| c["asset_id"] == id)
+            .unwrap_or_else(|| panic!("missing {}", id))
+    };
+    assert_eq!(by_id("asset.one")["satisfiable"], false);
+    assert_eq!(by_id("asset.two")["satisfiable"], true);
+    let unpriceable = res["unpriceable_collateral"].as_array().unwrap();
+    assert_eq!(unpriceable.len(), 1);
+    assert_eq!(unpriceable[0].as_str(), Some("asset.one"));
+    // asset.two at $1, not in supported list → haircut 100%; 10 units = $10.
+    assert_eq!(res["collateral_value_usd"].as_str(), Some("10"));
+    assert_eq!(res["health"].as_str(), Some("healthy"));
+    assert!(res["health_unknown_reason"].is_null());
 }

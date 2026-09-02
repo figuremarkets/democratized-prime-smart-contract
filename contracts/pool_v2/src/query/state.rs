@@ -17,10 +17,7 @@ pub fn query_state(deps: Deps, env: Env) -> Result<Binary, QueryError> {
         .iter()
         .map(|a| {
             let amount = get_total_collateral_by_asset(deps.storage, &a.asset_id).unwrap_or(0);
-            AssetRequirementV1 {
-                asset_id: a.asset_id.clone(),
-                amount: Uint128::from(amount),
-            }
+            AssetRequirementV1::quoted(a.asset_id.clone(), Uint128::from(amount))
         })
         .collect();
     let supported_collateral = contract.supported_collateral_assets.clone();

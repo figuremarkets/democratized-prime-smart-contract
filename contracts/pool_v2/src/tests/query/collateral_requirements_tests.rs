@@ -69,6 +69,7 @@ fn get_collateral_requirements_zero_loan_no_borrower_returns_zeros() {
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
+    assert_eq!(required[0]["satisfiable"], true);
 }
 
 /// Borrower with no existing debt and zero new loan → full path returns zeros.
@@ -103,6 +104,7 @@ fn get_collateral_requirements_zero_loan_borrower_no_debt_returns_zeros() {
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
+    assert_eq!(required[0]["satisfiable"], true);
 }
 
 #[test]
@@ -171,6 +173,14 @@ fn get_collateral_requirements_returns_zero_amount_when_requested_asset_has_no_p
         .find(|r| r.asset_id == "asset.unknown")
         .expect("preserve 1:1 with collateral_assets");
     assert!(unknown.amount.is_zero());
+    assert!(!unknown.satisfiable);
+    let priced = resp
+        .required
+        .iter()
+        .find(|r| r.asset_id == "asset.one")
+        .expect("priced requested asset stays quotable");
+    assert!(priced.satisfiable);
+    assert!(!priced.amount.is_zero());
 }
 
 #[test]
@@ -208,6 +218,7 @@ fn get_collateral_requirements_with_oracle_returns_required_value_and_per_asset(
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "1563");
+    assert_eq!(required[0]["satisfiable"], true);
 }
 
 /// When borrower has existing collateral, per-asset "required" is the *additional* amount needed, not the full amount.
@@ -263,6 +274,7 @@ fn get_collateral_requirements_with_borrower_subtracts_existing_collateral() {
         required[0]["amount"], "1063",
         "additional asset.one needed (850/0.8 ceil), not full 1563"
     );
+    assert_eq!(required[0]["satisfiable"], true);
 }
 
 /// When an asset has value_per_unit zero (e.g. oracle price 0), it is still included in `required`
@@ -303,6 +315,7 @@ fn get_collateral_requirements_zero_value_per_unit_includes_asset_with_zero_amou
         required[0]["amount"], "0",
         "zero value_per_unit yields amount 0, not omitted"
     );
+    assert_eq!(required[0]["satisfiable"], false);
 }
 
 /// When borrower has existing debt and new_loan_amount is 0, required_collateral_value_usd must
@@ -417,9 +430,11 @@ fn get_collateral_requirements_is_not_quotable_when_requested_collateral_is_stal
     )
     .expect("stale requested collateral should be unquotable, not a query error");
     let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
-    // amount 0 currently means both “need none” and “cannot quote” (AddCollateral of a
-    // new denom still requires a fresh price). Follow-up: AssetRequirementV1.satisfiable.
     assert!(resp.required[0].amount.is_zero());
+    assert!(
+        !resp.required[0].satisfiable,
+        "stale requested asset is unquotable, not “need none”"
+    );
 }
 
 #[test]
@@ -445,7 +460,7 @@ fn get_collateral_requirements_succeeds_when_held_collateral_price_is_stale() {
     );
     set_oracle_prices(&mut deps, prices);
 
-    query(
+    let bin = query(
         deps.as_ref(),
         env,
         QueryMsg::GetCollateralRequirements {
@@ -455,6 +470,12 @@ fn get_collateral_requirements_succeeds_when_held_collateral_price_is_stale() {
         },
     )
     .expect("stale held collateral must not fail the requirements query");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    assert!(resp.required[0].amount.is_zero());
+    assert!(
+        resp.required[0].satisfiable,
+        "zero additional needed is a real quote even if the requested feed is stale"
+    );
 }
 
 /// 18-decimal collateral at $1e-18: required base units exceed u128. Query still
@@ -497,4 +518,5 @@ fn get_collateral_requirements_cheap_18_decimal_asset_returns_zero_amount() {
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
+    assert_eq!(required[0]["satisfiable"], false);
 }
