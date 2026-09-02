@@ -68,11 +68,7 @@ fn supported_assets(assets: &[(&str, Option<&str>)]) -> Vec<CollateralAssetV1> {
 }
 
 fn price_entry(price_usd: &str) -> AssetPriceResponseV1 {
-    AssetPriceResponseV1 {
-        price_usd: Decimal256::from_str(price_usd).unwrap(),
-        as_of_epoch_second: 0,
-        expiration_epoch_seconds: u64::MAX,
-    }
+    AssetPriceResponseV1::new(Decimal256::from_str(price_usd).unwrap(), 0, u64::MAX)
 }
 
 // ---- get_health_from_ltv ----
@@ -185,7 +181,7 @@ fn total_collateral_value_one_asset_with_haircut() {
 
 #[test]
 fn total_collateral_value_one_asset_no_haircut_set_uses_full_value() {
-    // When haircut is None we treat as 100% (no discount); value = price × amount.
+    // When haircut is None we treat as 100% (no discount); value = display × amount / 10^precision.
     let mut collateral = BorrowerCollateralV1::default();
     collateral.amounts.insert("btc".to_string(), 10u128);
     let mut prices = PriceMapResponse::new();
@@ -208,6 +204,48 @@ fn total_collateral_value_missing_price_errors() {
         }
         _ => panic!("expected NotFoundError, got {:?}", err),
     }
+}
+
+#[test]
+fn total_collateral_value_zero_price_errors() {
+    let mut collateral = BorrowerCollateralV1::default();
+    collateral.amounts.insert("btc".to_string(), 10u128);
+    let mut prices = PriceMapResponse::new();
+    prices.insert("btc".to_string(), price_entry("0"));
+    let assets = supported_assets(&[("btc", Some("1.0"))]);
+    let err = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("Collateral price is zero"));
+            assert!(message.contains("btc"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn total_collateral_value_uses_display_and_precision() {
+    // 1 whole 18-decimal token at $0.50 display. Deprecated scaled price_usd would be 0
+    // (the original floor bug); display × amount / 10^18 must be $0.50.
+    let mut collateral = BorrowerCollateralV1::default();
+    collateral
+        .amounts
+        .insert("eth".to_string(), 1_000_000_000_000_000_000u128);
+    let mut prices = PriceMapResponse::new();
+    #[allow(deprecated)]
+    prices.insert(
+        "eth".to_string(),
+        AssetPriceResponseV1 {
+            price_usd: Decimal256::zero(),
+            display_price_usd: Decimal256::from_str("0.5").unwrap(),
+            precision: 18,
+            as_of_epoch_second: 0,
+            expiration_epoch_seconds: u64::MAX,
+        },
+    );
+    let assets = supported_assets(&[("eth", Some("1.0"))]);
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
+    assert_eq!(v, Decimal256::from_str("0.5").unwrap());
 }
 
 // ---- calculate_ltv ----

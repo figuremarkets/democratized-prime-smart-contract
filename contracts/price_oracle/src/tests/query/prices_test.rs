@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(deprecated)]
 mod query_prices_by_asset_unit {
     use crate::constants::DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS;
     use crate::model::error::QueryError;
@@ -48,6 +49,8 @@ mod query_prices_by_asset_unit {
             AssetPriceResponseV1 {
                 as_of_epoch_second: EPOCH_SECOND_JAN_01_2025 - 10,
                 price_usd: Decimal256::from_str("0.000100000123").unwrap(),
+                display_price_usd: Decimal256::from_str("100000.123").unwrap(),
+                precision: 9,
                 expiration_epoch_seconds: (EPOCH_SECOND_JAN_01_2025 - 10)
                     + (DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS as u64),
             },
@@ -75,6 +78,8 @@ mod query_prices_by_asset_unit {
             AssetPriceResponseV1 {
                 as_of_epoch_second: EPOCH_SECOND_JAN_01_2025 - 10,
                 price_usd: Decimal256::from_str("100000.123").unwrap(),
+                display_price_usd: Decimal256::from_str("100000.123").unwrap(),
+                precision: 0,
                 expiration_epoch_seconds: (EPOCH_SECOND_JAN_01_2025 - 10)
                     + (DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS as u64),
             },
@@ -119,6 +124,55 @@ mod query_prices_by_asset_unit {
                 message: "nbtc.figure.se".to_owned()
             }
             .to_err()
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(deprecated)]
+mod scale_truncation {
+    use crate::constants::DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS;
+    use crate::query::query_prices_by_assets;
+    use crate::tests::constants::EPOCH_SECOND_JAN_01_2025;
+    use crate::tests::helpers::{mock_dependencies, AssetMappingV1Builder, PriceV1Builder};
+    use cosmwasm_std::{from_json, Decimal256};
+    use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
+    use std::str::FromStr;
+
+    #[test]
+    fn get_by_alt_asset_emits_display_fields_when_scaled_price_is_zero() {
+        let mut deps = mock_dependencies(&[]);
+        AssetMappingV1Builder::new()
+            .set_asset_id("ETH")
+            .set_alt_asset_id("neth.figure.se")
+            .set_precision(18)
+            .set_staleness_threshold_seconds(DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS)
+            .build_and_store(deps.as_mut().storage);
+        PriceV1Builder::new()
+            .set_asset_id("ETH")
+            .set_as_of_time(EPOCH_SECOND_JAN_01_2025 - 10)
+            .set_price_usd(&Decimal256::from_str("0.5").unwrap())
+            .build_and_store(deps.as_mut().storage);
+
+        let result_body: PriceMapResponse = from_json(
+            query_prices_by_assets(&deps.storage, vec![String::from("neth.figure.se")]).unwrap(),
+        )
+        .unwrap();
+        let price = result_body.get("neth.figure.se").unwrap();
+        assert_eq!(
+            price,
+            &AssetPriceResponseV1 {
+                price_usd: Decimal256::zero(),
+                display_price_usd: Decimal256::from_str("0.5").unwrap(),
+                precision: 18,
+                as_of_epoch_second: EPOCH_SECOND_JAN_01_2025 - 10,
+                expiration_epoch_seconds: (EPOCH_SECOND_JAN_01_2025 - 10)
+                    + (DEFAULT_PRICE_STALENESS_THRESHOLD_SECONDS as u64),
+            }
+        );
+        assert_eq!(
+            price.value_usd(1_000_000_000_000_000_000).unwrap(),
+            Decimal256::from_str("0.5").unwrap()
         );
     }
 }

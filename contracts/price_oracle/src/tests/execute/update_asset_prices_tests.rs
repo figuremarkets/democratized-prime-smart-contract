@@ -156,11 +156,11 @@ mod unit {
         };
 
         let result = execute(deps.as_mut(), env, info, msg).unwrap();
-        let updated_price = AssetPriceResponseV1 {
-            price_usd: Decimal256::from_str("1234.567").unwrap(),
-            as_of_epoch_second: EPOCH_SECOND_JAN_01_2025,
-            expiration_epoch_seconds: EPOCH_SECOND_JAN_01_2025 + 30,
-        };
+        let updated_price = AssetPriceResponseV1::new(
+            Decimal256::from_str("1234.567").unwrap(),
+            EPOCH_SECOND_JAN_01_2025,
+            EPOCH_SECOND_JAN_01_2025 + 30,
+        );
         let mut updated_prices = BTreeMap::new();
         updated_prices.insert(DENOM0.to_string(), updated_price);
 
@@ -204,16 +204,16 @@ mod unit {
         };
 
         let result = execute(deps.as_mut(), env, info, msg).unwrap();
-        let previous_price = AssetPriceResponseV1 {
-            price_usd: Decimal256::from_str("1000").unwrap(),
-            as_of_epoch_second: EPOCH_SECOND_JAN_01_2025 - 100,
-            expiration_epoch_seconds: EPOCH_SECOND_JAN_01_2025 - 70,
-        };
-        let updated_price = AssetPriceResponseV1 {
-            price_usd: Decimal256::from_str("1234.567").unwrap(),
-            as_of_epoch_second: EPOCH_SECOND_JAN_01_2025,
-            expiration_epoch_seconds: EPOCH_SECOND_JAN_01_2025 + 30,
-        };
+        let previous_price = AssetPriceResponseV1::new(
+            Decimal256::from_str("1000").unwrap(),
+            EPOCH_SECOND_JAN_01_2025 - 100,
+            EPOCH_SECOND_JAN_01_2025 - 70,
+        );
+        let updated_price = AssetPriceResponseV1::new(
+            Decimal256::from_str("1234.567").unwrap(),
+            EPOCH_SECOND_JAN_01_2025,
+            EPOCH_SECOND_JAN_01_2025 + 30,
+        );
         let mut previous_prices = BTreeMap::new();
         previous_prices.insert(DENOM0.to_string(), previous_price);
         let mut updated_prices = BTreeMap::new();

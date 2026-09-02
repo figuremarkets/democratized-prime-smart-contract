@@ -1,4 +1,8 @@
 //! LTV and borrower health (margin rate = healthy bound; liquidation rate = liquidatable threshold).
+//!
+//! USD notionals use the oracle's `display_price_usd` and `precision`:
+//! `display_price_usd × amount / 10^precision`. Collateral then applies haircut.
+//! Do not multiply the deprecated scaled `price_usd` field by amount.
 
 use crate::model::collateral::BorrowerCollateralV1;
 use crate::model::collateral::CollateralAssetV1;
@@ -6,7 +10,7 @@ use crate::model::contract_state::ContractStateV1;
 use crate::model::error::{illegal_argument, not_found, ContractError};
 use crate::model::haircut_percentage;
 use crate::model::health::BorrowerHealthV1;
-use crate::utils::{format_as_percent_string, uint128_to_decimal256};
+use crate::utils::format_as_percent_string;
 use cosmwasm_std::{ensure, Decimal256, Uint128};
 use democratized_prime_lib::price_oracle::model::PriceMapResponse;
 use result_extensions::ResultExtensions;
@@ -70,7 +74,7 @@ pub fn calculate_ltv(
         ))
         .to_err();
     }
-    // Guard above ensures no divide-by-zero (e.g. when all collateral prices are 0).
+    // Guard above ensures no divide-by-zero (empty collateral amounts).
     borrow_balance_usd
         .checked_div(total_collateral_value_usd)
         .map_err(ContractError::from)
@@ -83,14 +87,16 @@ pub fn calculate_total_collateral_value_usd(
 ) -> Result<Decimal256, ContractError> {
     let mut total = Decimal256::zero();
     for (asset_id, amount) in collateral.amounts.iter() {
-        let asset_price_usd = prices
+        let price = prices
             .get(asset_id)
-            .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))
-            .map(|r| r.price_usd)?;
+            .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))?;
         let haircut = haircut_percentage(supported_assets, asset_id);
-        let value = asset_price_usd
-            .checked_mul(uint128_to_decimal256(*amount))
-            .map_err(ContractError::from)?
+        ensure!(
+            !price.is_zero_price(),
+            illegal_argument(format!("Collateral price is zero: {asset_id}"))
+        );
+        let value = price
+            .value_usd(*amount)?
             .checked_mul(haircut)
             .map_err(ContractError::from)?;
         total += value;
@@ -106,19 +112,16 @@ pub fn calculate_borrow_value_usd(
     if underlying_debt.is_zero() {
         return Decimal256::zero().to_ok();
     }
-    let price_usd = prices
+    let price = prices
         .get(lending_denom)
-        .ok_or_else(|| not_found(format!("Price of asset: {}", lending_denom)))
-        .map(|r| r.price_usd)?;
+        .ok_or_else(|| not_found(format!("Price of asset: {}", lending_denom)))?;
 
     ensure!(
-        !price_usd.is_zero(),
+        !price.is_zero_price(),
         illegal_argument("Lending denom price is zero")
     );
 
-    price_usd
-        .checked_mul(uint128_to_decimal256(underlying_debt.u128()))
-        .map_err(ContractError::from)
+    price.value_usd(underlying_debt.u128())
 }
 
 /// Ensures the borrower is Healthy (LTV <= margin_rate). Used before allowing borrow.

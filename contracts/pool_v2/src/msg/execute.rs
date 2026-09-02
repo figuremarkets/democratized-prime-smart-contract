@@ -67,7 +67,7 @@ pub enum ExecuteMsg {
     /// in [100%, liquidation_bonus_rate] of the amount repaid.
     Liquidate {
         borrower: String,
-        /// Asset id -> amount to seize from the borrower. Market value (price × amount) must be in [100%, liquidation_bonus_rate] of amount repaid.
+        /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.
         collateral_to_seize: BTreeMap<String, Uint128>,
     },
 

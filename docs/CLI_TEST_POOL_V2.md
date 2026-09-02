@@ -232,7 +232,7 @@ provenanced tx marker mint 1000000000$COLLATERAL_DENOM $BORROWER \
   -y
 ```
 
-Set a price for the collateral in the price oracle so the pool can value it for Borrow/Liquidate. The oracle admin (e.g. **admin**) must send **UpdateAssetPrices** with USD prices for the **lending denom** and **collateral denom**. Use realistic USD values; omit `as_of` to use block time.
+Set a price for the collateral in the price oracle so the pool can value it for Borrow/Liquidate. The oracle admin (e.g. **admin**) must send **UpdateAssetPrices** with **display** USD prices for the **lending denom** and **collateral denom** (whole-token USD, not per-base-unit). Use realistic USD values; omit `as_of` to use block time. Pool v2 computes notionals as `display_price_usd × amount / 10^precision` from the oracle mapping (precision 0 when you price the denom directly).
 
 ```bash
 # Lending denom (e.g. 1 for a stablecoin) and collateral. Adjust "usd" values as needed.

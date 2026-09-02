@@ -397,3 +397,45 @@ fn get_collateral_requirements_fails_when_oracle_returns_stale_price() {
         _ => panic!("expected StalePriceDataError, got {:?}", err),
     }
 }
+
+/// 18-decimal collateral at $1e-18: required base units exceed u128. Query still
+/// returns (amount 0 = no finite representable amount), rather than erroring wholesale.
+#[test]
+#[allow(deprecated)]
+fn get_collateral_requirements_cheap_18_decimal_asset_returns_zero_amount() {
+    let (mut deps, env) = setup_instantiated();
+    let s = env.block.time.seconds();
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        AssetPriceResponseV1 {
+            price_usd: Decimal256::zero(),
+            display_price_usd: Decimal256::from_ratio(1u128, 1_000_000_000_000_000_000u128),
+            precision: 18,
+            as_of_epoch_second: s,
+            expiration_epoch_seconds: s.saturating_add(1),
+        },
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: None,
+            new_loan_amount: Uint128::new(800),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("query should succeed");
+    let res: serde_json::Value = from_json(bin).expect("decode GetCollateralRequirements response");
+    assert_eq!(res["required_collateral_value_usd"], "1000");
+    let required = res["required"].as_array().unwrap();
+    assert_eq!(required.len(), 1);
+    assert_eq!(required[0]["asset_id"], "asset.one");
+    assert_eq!(required[0]["amount"], "0");
+}

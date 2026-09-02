@@ -10,8 +10,8 @@ use crate::model::{haircut_percentage, CollateralRequirementsResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
 use crate::utils::health::calculate_total_collateral_value_usd;
 use crate::utils::{
-    calculate_borrow_value_usd, compute_effective_reserve, decimal256_ceil_to_u128,
-    get_price_from_oracle, scaled_to_underlying_borrow,
+    calculate_borrow_value_usd, compute_effective_reserve, get_price_from_oracle,
+    scaled_to_underlying_borrow,
 };
 use cosmwasm_std::{to_json_binary, Binary, Decimal256, Deps, Env, Uint128};
 
@@ -120,21 +120,24 @@ pub fn query_collateral_requirements(
     let mut required: Vec<AssetRequirementV1> = Vec::with_capacity(collateral_assets.len());
     for asset_id in collateral_assets {
         let haircut = haircut_percentage(&contract.supported_collateral_assets, asset_id);
-        let price_usd = prices
-            .get(asset_id)
-            .ok_or_else(|| QueryError::Contract(not_found(format!("Price of asset: {}", asset_id))))
-            .map(|r| r.price_usd)?;
-        let value_per_unit = price_usd
-            .checked_mul(haircut)
-            .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
-        let amount = if value_per_unit.is_zero() {
+        let price = prices.get(asset_id).ok_or_else(|| {
+            QueryError::Contract(not_found(format!("Price of asset: {}", asset_id)))
+        })?;
+        let amount = if price.is_zero_price() || haircut.is_zero() {
             // Asset has zero value per unit (e.g. price or haircut is 0); no finite amount satisfies. Preserve 1:1 with collateral_assets.
             Uint128::zero()
         } else {
-            let amount_d = value_to_cover
-                .checked_div(value_per_unit)
+            // units * (display / 10^precision) * haircut >= value_to_cover
+            let pre_haircut = value_to_cover
+                .checked_div(haircut)
                 .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
-            Uint128::from(decimal256_ceil_to_u128(amount_d).unwrap_or(0))
+            match price.amount_from_usd(pre_haircut) {
+                Ok(amt) => Uint128::from(amt),
+                // Cheap high-precision asset: required base units do not fit u128.
+                // Same as zero-price: no finite representable amount satisfies.
+                Err(ContractError::AmountNotRepresentable) => Uint128::zero(),
+                Err(e) => return Err(QueryError::Contract(e)),
+            }
         };
         required.push(AssetRequirementV1 {
             asset_id: asset_id.clone(),
