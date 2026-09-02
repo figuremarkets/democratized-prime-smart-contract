@@ -1,7 +1,9 @@
-//! # Liquidation (contract owner only)
+//! # Liquidation
 //!
-//! Liquidates a borrower whose LTV is at or above the liquidation rate. The liquidator (owner)
-//! repays debt and chooses which collateral to seize. The **market value**
+//! Liquidates a borrower whose LTV is at or above the liquidation rate. Auth follows
+//! [`crate::model::LiquidationAccess`]: owner-only by default, or any sender when the
+//! custodian has set **permissionless**. The liquidator repays debt and chooses which
+//! collateral to seize. The **market value**
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
@@ -29,8 +31,8 @@ use crate::constants::{
 };
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
-use crate::model::BadDebtLossAllocation;
 use crate::model::BorrowerCollateralV1;
+use crate::model::{BadDebtLossAllocation, LiquidationAccess};
 use crate::storage::{
     get_borrower_collateral, get_contract_state_v1, get_scaled_borrow, set_borrower_collateral,
     set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
@@ -50,9 +52,10 @@ use std::collections::{BTreeMap, HashSet};
 pub const ACTION: &str = "liquidate";
 pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may liquidate";
 
-/// Liquidate a borrower whose LTV ≥ liquidation_rate. Contract owner only. Repay debt from funds and seize
-/// collateral per `collateral_to_seize`; market value must be 100%–liquidation_bonus_rate of repay, except a
-/// full close waives the 100% floor (bonus cap still applies). See module doc for flow.
+/// Liquidate a borrower whose LTV ≥ liquidation_rate. Auth follows [`LiquidationAccess`].
+/// Repay debt from funds and seize collateral per `collateral_to_seize`; market value must be
+/// 100%–liquidation_bonus_rate of repay, except a full close waives the 100% floor (bonus cap
+/// still applies). See module doc for flow.
 pub fn liquidate(
     deps: DepsMut,
     env: Env,
@@ -63,7 +66,12 @@ pub fn liquidate(
     let contract = get_contract_state_v1(deps.storage)?;
 
     // ---------- 1. Auth and borrower identity ----------
-    assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
+    match contract.liquidation_access {
+        LiquidationAccess::OwnerOnly => {
+            assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
+        }
+        LiquidationAccess::Permissionless => {}
+    }
     let borrower_addr = deps.api.addr_validate(borrower.trim())?;
     let borrower_key = borrower_addr.as_str();
 

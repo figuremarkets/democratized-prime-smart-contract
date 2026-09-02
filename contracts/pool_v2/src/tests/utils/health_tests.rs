@@ -45,6 +45,7 @@ fn contract_state(margin_rate: &str, liquidation_rate: &str) -> ContractStateV1 
         bad_debt_loss_allocation: Default::default(),
         custodian: Some(Addr::unchecked(CUSTODIAN)),
         max_liquidation_staleness_seconds: 3600,
+        liquidation_access: Default::default(),
     }
 }
 

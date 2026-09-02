@@ -41,6 +41,29 @@ pub enum BadDebtLossAllocation {
     ImmediateLiquidityIndexHaircut,
 }
 
+/// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only.
+/// Do not enable [`Self::Permissionless`] against
+/// [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`]: last-known then becomes an extractable
+/// strategy. Paused still blocks Liquidate for everyone.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LiquidationAccess {
+    /// Only the cw-ownable owner may liquidate (current production posture).
+    #[default]
+    OwnerOnly,
+    /// Any address may liquidate a liquidatable borrower.
+    Permissionless,
+}
+
+impl LiquidationAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LiquidationAccess::OwnerOnly => "owner_only",
+            LiquidationAccess::Permissionless => "permissionless",
+        }
+    }
+}
+
 impl BadDebtLossAllocation {
     /// Stable snake_case tag for event attributes (matches JSON).
     pub fn as_str(self) -> &'static str {
@@ -140,6 +163,11 @@ pub struct ContractStateV1 {
     /// last-known prices.
     #[serde(rename = "mlss", default = "default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
+
+    /// Who may call Liquidate. Default [`LiquidationAccess::OwnerOnly`] so older state
+    /// blobs and omitted instantiate JSON stay owner-gated.
+    #[serde(rename = "la", default)]
+    pub liquidation_access: LiquidationAccess,
 }
 
 impl ContractStateV1 {

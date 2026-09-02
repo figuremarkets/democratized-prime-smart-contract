@@ -103,7 +103,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower (contract owner only). Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid.",
+      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.",
       "type": "object",
       "required": [
         "liquidate"
@@ -338,6 +338,18 @@
               "type": [
                 "string",
                 "null"
+              ]
+            },
+            "liquidation_access": {
+              "description": "Who may call Liquidate. Omitted / JSON `null` = no change.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LiquidationAccess"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "liquidation_bonus_rate": {
@@ -760,6 +772,25 @@
           "type": "string",
           "enum": [
             "flat_borrow_spread"
+          ]
+        }
+      ]
+    },
+    "LiquidationAccess": {
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. Do not enable [`Self::Permissionless`] against [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`]: last-known then becomes an extractable strategy. Paused still blocks Liquidate for everyone.",
+      "oneOf": [
+        {
+          "description": "Only the cw-ownable owner may liquidate (current production posture).",
+          "type": "string",
+          "enum": [
+            "owner_only"
+          ]
+        },
+        {
+          "description": "Any address may liquidate a liquidatable borrower.",
+          "type": "string",
+          "enum": [
+            "permissionless"
           ]
         }
       ]

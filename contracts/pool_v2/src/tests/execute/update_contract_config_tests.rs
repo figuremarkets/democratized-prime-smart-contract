@@ -8,8 +8,8 @@ use crate::execute::update_contract_config::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{
-    BadDebtLossAllocation, CollateralAssetV1, Denom, OperationalState, RateParamsV1,
-    MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+    BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, OperationalState,
+    RateParamsV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1};
@@ -60,6 +60,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidation_access: Default::default(),
     }
 }
 
@@ -97,6 +98,7 @@ fn update_contract_config_succeeds_single_field() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -127,6 +129,7 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -138,6 +141,38 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
     assert_eq!(
         contract.max_liquidation_staleness_seconds,
         MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS
+    );
+}
+
+#[test]
+fn update_contract_config_sets_liquidation_access() {
+    let (mut deps, env) = setup_instantiated();
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
+            liquidation_access: Some(LiquidationAccess::Permissionless),
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+    .expect("update_contract_config should succeed");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        contract.liquidation_access,
+        LiquidationAccess::Permissionless
     );
 }
 
@@ -158,6 +193,7 @@ fn update_contract_config_fails_max_liquidation_staleness_exceeds_maximum() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS + 1),
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -197,6 +233,7 @@ fn update_contract_config_sets_bad_debt_loss_allocation() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
             custodian: None,
@@ -231,6 +268,7 @@ fn update_contract_config_rejects_bad_debt_allocation_change_when_deficit_positi
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
             custodian: None,
@@ -270,6 +308,7 @@ fn update_contract_config_allows_other_fields_when_deficit_positive() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: None,
             custodian: None,
@@ -301,6 +340,7 @@ fn update_contract_config_allows_redundant_bad_debt_allocation_when_deficit_posi
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::DeferredToDeficit),
             custodian: None,
@@ -328,6 +368,7 @@ fn update_contract_config_succeeds_multiple_fields() {
             min_borrow: Some(Uint128::new(50)),
             max_borrower_collateral_types: Some(3),
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -362,6 +403,7 @@ fn update_contract_config_succeeds_price_oracle() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -390,6 +432,7 @@ fn update_contract_config_emits_action() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -426,6 +469,7 @@ fn update_contract_config_fails_for_owner() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -456,6 +500,7 @@ fn update_contract_config_fails_for_non_custodian_user() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -486,6 +531,7 @@ fn update_contract_config_fails_with_funds() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -516,6 +562,7 @@ fn update_contract_config_fails_no_fields() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -548,6 +595,7 @@ fn update_contract_config_fails_margin_not_less_than_liquidation() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -579,6 +627,7 @@ fn update_contract_config_fails_when_liquidation_rate_is_greater_than_one() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -616,6 +665,7 @@ fn update_contract_config_fails_liquidation_rate_decrease() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -652,6 +702,7 @@ fn update_contract_config_succeeds_liquidation_rate_increase() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -688,6 +739,7 @@ fn update_contract_config_succeeds_commit_market_id_set() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -718,6 +770,7 @@ fn update_contract_config_preserves_commit_market_id_when_not_patched() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -738,6 +791,7 @@ fn update_contract_config_preserves_commit_market_id_when_not_patched() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -767,6 +821,7 @@ fn update_contract_config_fails_bonus_not_gt_one() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -799,6 +854,7 @@ fn update_contract_config_fails_min_lend_zero() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -831,6 +887,7 @@ fn update_contract_config_fails_max_borrower_collateral_types_zero() {
             min_borrow: None,
             max_borrower_collateral_types: Some(0),
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -863,6 +920,7 @@ fn update_contract_config_fails_empty_price_oracle() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -896,6 +954,7 @@ fn update_contract_config_transfers_custodian() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(NEW_CUSTODIAN.to_owned()),
@@ -924,6 +983,7 @@ fn update_contract_config_old_custodian_denied_after_transfer() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(NEW_CUSTODIAN.to_owned()),
@@ -944,6 +1004,7 @@ fn update_contract_config_old_custodian_denied_after_transfer() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -974,6 +1035,7 @@ fn update_contract_config_new_custodian_succeeds_after_transfer() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(NEW_CUSTODIAN.to_owned()),
@@ -995,6 +1057,7 @@ fn update_contract_config_new_custodian_succeeds_after_transfer() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -1023,6 +1086,7 @@ fn update_contract_config_owner_cannot_transfer_custodian() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(NEW_CUSTODIAN.to_owned()),
@@ -1056,6 +1120,7 @@ fn update_contract_config_custodian_only_field_succeeds() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(NEW_CUSTODIAN.to_owned()),
@@ -1090,6 +1155,7 @@ fn update_contract_config_rejects_invalid_custodian() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some("not_a_valid_address".to_owned()),
@@ -1120,6 +1186,7 @@ fn transferred_custodian_gates_set_operational_state() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(NEW_CUSTODIAN.to_owned()),
@@ -1172,6 +1239,7 @@ fn update_contract_config_trims_custodian_whitespace() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: Some(format!("  {NEW_CUSTODIAN}  ")),

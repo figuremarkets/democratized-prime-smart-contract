@@ -1,4 +1,6 @@
-use crate::model::{BadDebtLossAllocation, CollateralAssetV1, OperationalState, RateParamsV1};
+use crate::model::{
+    BadDebtLossAllocation, CollateralAssetV1, LiquidationAccess, OperationalState, RateParamsV1,
+};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Decimal256, Uint128};
 use cw20::Cw20ReceiveMsg;
@@ -62,9 +64,10 @@ pub enum ExecuteMsg {
         to_remove: BTreeMap<String, Uint128>,
     },
 
-    /// Liquidate a borrower (contract owner only). Liquidator repays debt via funds (one coin, lending
-    /// denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be
-    /// in [100%, liquidation_bonus_rate] of the amount repaid.
+    /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
+    /// Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt),
+    /// excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the
+    /// amount repaid, except a full close waives the 100% floor.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.
@@ -123,6 +126,9 @@ pub enum ExecuteMsg {
         /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
         #[serde(default)]
         max_liquidation_staleness_seconds: Option<u64>,
+        /// Who may call Liquidate. Omitted / JSON `null` = no change.
+        #[serde(default)]
+        liquidation_access: Option<LiquidationAccess>,
     },
 
     /// Update interest rate params (contract owner only). Full replacement; validated same as at instantiate.

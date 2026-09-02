@@ -11,7 +11,7 @@ pub mod state;
 pub use collateral::{haircut_percentage, BorrowerCollateralV1, CollateralAssetV1};
 pub use contract_state::{
     default_max_liquidation_staleness_seconds, BadDebtLossAllocation, ContractStateV1,
-    OperationalState, DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
+    LiquidationAccess, OperationalState, DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
     MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 pub use denom::Denom;
