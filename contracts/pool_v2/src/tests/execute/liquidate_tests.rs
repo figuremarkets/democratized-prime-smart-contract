@@ -405,6 +405,43 @@ fn liquidate_fails_when_seizing_unpriceable_collateral() {
     }
 }
 
+/// A stored zero does not count as last-known. Seizing it beside a valued asset would
+/// add $0 to the band, so the bonus cap would not stop the sweep.
+#[test]
+fn liquidate_fails_when_seizing_zero_price_collateral() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    add_unreliable_dust_then_break_feed(&mut deps, &env, false, false);
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let mut seize = collateral_to_seize_success();
+    seize.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(1));
+
+    let min_repay = 374u128;
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("Cannot seize unpriceable collateral"));
+            assert!(message.contains(UNRELIABLE_COLLATERAL));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
 #[test]
 fn liquidate_succeeds_when_seizing_stale_collateral() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();

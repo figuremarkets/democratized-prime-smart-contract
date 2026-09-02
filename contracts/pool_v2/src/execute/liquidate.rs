@@ -5,7 +5,7 @@
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
-//! Collateral with **no stored** oracle price, or last-known older than
+//! Collateral with **no stored** oracle price, a **zero** stored price, or last-known older than
 //! `max_liquidation_staleness_seconds`, is valued at zero for LTV/min-repay and cannot
 //! be seized. A **stale** stored price still within that bound is used as last-known (not fatal)
 //! so liquidations are not frozen by a paused feed. The lending denom must have a stored price
@@ -97,7 +97,9 @@ pub fn liquidate(
         .any(|id| !quoted.unpriceable.contains(id));
     ensure!(
         has_priceable_collateral,
-        illegal_argument("No priceable collateral (all held assets have no stored oracle price)",)
+        illegal_argument(
+            "No priceable collateral (all held assets have no stored, zero, or over-stale oracle price)",
+        )
     );
     let (health, _ltv) = get_borrower_health(
         &contract,
@@ -248,7 +250,7 @@ pub fn liquidate(
         ensure!(
             !quoted.unpriceable.contains(asset_id),
             illegal_argument(format!(
-                "Cannot seize unpriceable collateral (no stored oracle price): {}",
+                "Cannot seize unpriceable collateral (no stored, zero, or over-stale oracle price): {}",
                 asset_id
             ))
         );
