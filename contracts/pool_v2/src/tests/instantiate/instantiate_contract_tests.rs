@@ -8,7 +8,7 @@ use crate::constants::{
 use crate::instantiate::{instantiate_contract, reply};
 use crate::model::error::ContractError;
 use crate::model::{
-    CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
+    BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
     MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS, MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
@@ -656,6 +656,7 @@ fn instantiate_fails_permissionless_when_staleness_above_permissionless_bound() 
     deps.api = deps.api.with_prefix("tp");
     let mut msg = default_instantiate_msg();
     msg.liquidation_access = LiquidationAccess::Permissionless;
+    msg.bad_debt_loss_allocation = BadDebtLossAllocation::ImmediateLiquidityIndexHaircut;
     msg.max_liquidation_staleness_seconds = MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS;
 
     let err = instantiate_contract(
@@ -682,6 +683,7 @@ fn instantiate_succeeds_permissionless_at_permissionless_staleness_bound() {
     deps.api = deps.api.with_prefix("tp");
     let mut msg = default_instantiate_msg();
     msg.liquidation_access = LiquidationAccess::Permissionless;
+    msg.bad_debt_loss_allocation = BadDebtLossAllocation::ImmediateLiquidityIndexHaircut;
     msg.max_liquidation_staleness_seconds = MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS;
 
     instantiate_contract(
@@ -701,6 +703,35 @@ fn instantiate_succeeds_permissionless_at_permissionless_staleness_bound() {
         contract.max_liquidation_staleness_seconds,
         MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS
     );
+    assert_eq!(
+        contract.bad_debt_loss_allocation,
+        BadDebtLossAllocation::ImmediateLiquidityIndexHaircut
+    );
+}
+
+#[test]
+fn instantiate_fails_permissionless_while_deferred() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidation_access = LiquidationAccess::Permissionless;
+    msg.bad_debt_loss_allocation = BadDebtLossAllocation::DeferredToDeficit;
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message
+                .contains("permissionless liquidation requires immediate_liquidity_index_haircut"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
 }
 
 #[test]

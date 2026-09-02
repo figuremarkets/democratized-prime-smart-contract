@@ -68,7 +68,7 @@
       "$ref": "#/definitions/Denom"
     },
     "liquidation_access": {
-      "description": "Who may call Liquidate. Omitted JSON is owner-only. Rejected if last-known would exceed [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].",
+      "description": "Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`].",
       "default": "owner_only",
       "allOf": [
         {
@@ -138,7 +138,7 @@
   "additionalProperties": false,
   "definitions": {
     "BadDebtLossAllocation": {
-      "description": "How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers.",
+      "description": "How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers. [`Self::DeferredToDeficit`] is backstop/cover-from-outside (owner-controlled trigger). [`Self::ImmediateLiquidityIndexHaircut`] socializes in the liquidating tx (required for [`LiquidationAccess::Permissionless`]).",
       "oneOf": [
         {
           "description": "Book `deficit_underlying`; reduce via **EliminateDeficit** or **SocializeDeficit** (pro-rata `liquidity_index` haircut + lower deficit).",
@@ -221,7 +221,7 @@
       ]
     },
     "LiquidationAccess": {
-      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] is rejected when last-known exceeds [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (see [`ensure_permissionless_staleness_bound`]). Paused still blocks Liquidate for everyone.",
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Paused still blocks Liquidate for everyone.",
       "oneOf": [
         {
           "description": "Only the cw-ownable owner may liquidate (current production posture).",

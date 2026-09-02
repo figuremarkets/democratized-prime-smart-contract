@@ -33,19 +33,32 @@ const _: () = assert!(
     MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS
 );
 
-/// Reject permissionless liquidation when last-known exceeds
-/// [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`]. Call after applying config so
-/// either field-order is caught (raise staleness while permissionless, or enable
-/// permissionless while staleness is already high).
-pub fn ensure_permissionless_staleness_bound(
+/// Reject permissionless liquidation unless last-known, bad-debt allocation, and deficit
+/// are compatible. Call after applying config so either field-order is caught.
+pub fn ensure_permissionless_config(
     access: LiquidationAccess,
     max_liquidation_staleness_seconds: u64,
+    allocation: BadDebtLossAllocation,
+    deficit_underlying: u128,
 ) -> Result<(), ContractError> {
     if access == LiquidationAccess::Permissionless {
         ensure!(
             max_liquidation_staleness_seconds <= MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
             illegal_argument(
                 "max_liquidation_staleness_seconds too high for permissionless liquidation"
+            )
+        );
+        ensure!(
+            allocation == BadDebtLossAllocation::ImmediateLiquidityIndexHaircut,
+            illegal_argument(
+                "permissionless liquidation requires immediate_liquidity_index_haircut"
+            )
+        );
+        ensure!(
+            deficit_underlying == 0,
+            illegal_argument(
+                "cannot enable permissionless liquidation while deficit_underlying > 0; \
+                 clear the deficit with EliminateDeficit or SocializeDeficit first"
             )
         );
     }
@@ -57,6 +70,9 @@ pub fn default_max_liquidation_staleness_seconds() -> u64 {
 }
 
 /// How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers.
+/// [`Self::DeferredToDeficit`] is backstop/cover-from-outside (owner-controlled trigger).
+/// [`Self::ImmediateLiquidityIndexHaircut`] socializes in the liquidating tx (required for
+/// [`LiquidationAccess::Permissionless`]).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BadDebtLossAllocation {
@@ -70,9 +86,9 @@ pub enum BadDebtLossAllocation {
 }
 
 /// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only.
-/// [`Self::Permissionless`] is rejected when last-known exceeds
-/// [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (see
-/// [`ensure_permissionless_staleness_bound`]). Paused still blocks Liquidate for everyone.
+/// [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`],
+/// [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0`
+/// (see [`ensure_permissionless_config`]). Paused still blocks Liquidate for everyone.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LiquidationAccess {

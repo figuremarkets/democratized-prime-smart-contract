@@ -69,8 +69,9 @@ pub struct InstantiateMsg {
     /// permissionless cannot exceed 1 hour). `0` disables last-known prices.
     #[serde(default = "crate::model::contract_state::default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
-    /// Who may call Liquidate. Omitted JSON is owner-only. Rejected if last-known
-    /// would exceed [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].
+    /// Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known
+    /// ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and
+    /// [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`].
     #[serde(default)]
     pub liquidation_access: LiquidationAccess,
 }

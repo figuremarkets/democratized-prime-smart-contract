@@ -4,7 +4,7 @@ use crate::constants::{
 };
 use crate::model::error::{illegal_argument, ContractError};
 use crate::model::{
-    ensure_permissionless_staleness_bound, ContractStateV1, OperationalState, ReserveStateV1,
+    ensure_permissionless_config, ContractStateV1, OperationalState, ReserveStateV1,
     MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
@@ -150,9 +150,11 @@ pub fn instantiate_contract(
         msg.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
         illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
-    ensure_permissionless_staleness_bound(
+    ensure_permissionless_config(
         msg.liquidation_access,
         msg.max_liquidation_staleness_seconds,
+        msg.bad_debt_loss_allocation,
+        0,
     )?;
     ensure!(
         msg.lender_required_attrs.len() <= MAX_LENDER_BORROWER_REQUIRED_ATTRS,

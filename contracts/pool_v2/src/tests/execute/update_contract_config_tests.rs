@@ -149,39 +149,32 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
 fn update_contract_config_sets_liquidation_access() {
     let (mut deps, env) = setup_instantiated();
 
-    execute(
-        deps.as_mut(),
+    update_liquidation_config(
+        &mut deps,
         env,
-        message_info(&Addr::unchecked(CUSTODIAN), &[]),
-        ExecuteMsg::UpdateContractConfig {
-            margin_rate: None,
-            liquidation_rate: None,
-            liquidation_bonus_rate: None,
-            price_oracle_address: None,
-            min_lend: None,
-            min_borrow: None,
-            max_borrower_collateral_types: None,
-            max_liquidation_staleness_seconds: None,
-            liquidation_access: Some(LiquidationAccess::Permissionless),
-            commit_market_id: None,
-            bad_debt_loss_allocation: Default::default(),
-            custodian: None,
-        },
+        None,
+        Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
     )
-    .expect("update_contract_config should succeed");
+    .expect("permissionless with immediate haircut in one message");
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(
         contract.liquidation_access,
         LiquidationAccess::Permissionless
     );
+    assert_eq!(
+        contract.bad_debt_loss_allocation,
+        BadDebtLossAllocation::ImmediateLiquidityIndexHaircut
+    );
 }
 
-fn update_staleness_and_access(
+fn update_liquidation_config(
     deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
     env: Env,
     max_liquidation_staleness_seconds: Option<u64>,
     liquidation_access: Option<LiquidationAccess>,
+    bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
 ) -> Result<Response, ContractError> {
     execute(
         deps.as_mut(),
@@ -198,7 +191,7 @@ fn update_staleness_and_access(
             max_liquidation_staleness_seconds,
             liquidation_access,
             commit_market_id: None,
-            bad_debt_loss_allocation: Default::default(),
+            bad_debt_loss_allocation,
             custodian: None,
         },
     )
@@ -219,22 +212,48 @@ fn assert_permissionless_staleness_rejected(err: ContractError) {
     }
 }
 
+fn assert_permissionless_requires_immediate(err: ContractError) {
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains(
+                    "permissionless liquidation requires immediate_liquidity_index_haircut"
+                ),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
 #[test]
 fn update_contract_config_rejects_permissionless_when_staleness_already_above_bound() {
     let (mut deps, env) = setup_instantiated();
-    update_staleness_and_access(
+    update_liquidation_config(
         &mut deps,
         env.clone(),
         Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
         None,
+        None,
     )
     .expect("owner_only may use the 24h cap");
 
-    let err = update_staleness_and_access(
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        None,
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+    )
+    .expect("owner_only may use immediate haircut at 24h");
+
+    let err = update_liquidation_config(
         &mut deps,
         env,
         None,
         Some(LiquidationAccess::Permissionless),
+        None,
     )
     .unwrap_err();
     assert_permissionless_staleness_rejected(err);
@@ -243,18 +262,20 @@ fn update_contract_config_rejects_permissionless_when_staleness_already_above_bo
 #[test]
 fn update_contract_config_rejects_raising_staleness_while_permissionless() {
     let (mut deps, env) = setup_instantiated();
-    update_staleness_and_access(
+    update_liquidation_config(
         &mut deps,
         env.clone(),
         None,
         Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
     )
-    .expect("permissionless allowed at the 1h default");
+    .expect("permissionless allowed at the 1h default with immediate haircut");
 
-    let err = update_staleness_and_access(
+    let err = update_liquidation_config(
         &mut deps,
         env,
         Some(MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS + 1),
+        None,
         None,
     )
     .unwrap_err();
@@ -264,11 +285,12 @@ fn update_contract_config_rejects_raising_staleness_while_permissionless() {
 #[test]
 fn update_contract_config_rejects_permissionless_and_24h_in_one_message() {
     let (mut deps, env) = setup_instantiated();
-    let err = update_staleness_and_access(
+    let err = update_liquidation_config(
         &mut deps,
         env,
         Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
         Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
     )
     .unwrap_err();
     assert_permissionless_staleness_rejected(err);
@@ -277,19 +299,21 @@ fn update_contract_config_rejects_permissionless_and_24h_in_one_message() {
 #[test]
 fn update_contract_config_permissionless_and_1h_in_one_message_from_24h_owner_only() {
     let (mut deps, env) = setup_instantiated();
-    update_staleness_and_access(
+    update_liquidation_config(
         &mut deps,
         env.clone(),
         Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
         None,
+        None,
     )
     .expect("owner_only may use the 24h cap");
 
-    update_staleness_and_access(
+    update_liquidation_config(
         &mut deps,
         env,
         Some(MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS),
         Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
     )
     .expect("applying both fields then checking allows tightening last-known with permissionless");
 
@@ -302,6 +326,173 @@ fn update_contract_config_permissionless_and_1h_in_one_message_from_24h_owner_on
         contract.max_liquidation_staleness_seconds,
         MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS
     );
+}
+
+#[test]
+fn update_contract_config_rejects_permissionless_while_deferred() {
+    let (mut deps, env) = setup_instantiated();
+    let err = update_liquidation_config(
+        &mut deps,
+        env,
+        None,
+        Some(LiquidationAccess::Permissionless),
+        None,
+    )
+    .unwrap_err();
+    assert_permissionless_requires_immediate(err);
+}
+
+#[test]
+fn update_contract_config_rejects_deferred_while_permissionless() {
+    let (mut deps, env) = setup_instantiated();
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+    )
+    .expect("permissionless + immediate");
+
+    let err = update_liquidation_config(
+        &mut deps,
+        env,
+        None,
+        None,
+        Some(BadDebtLossAllocation::DeferredToDeficit),
+    )
+    .unwrap_err();
+    assert_permissionless_requires_immediate(err);
+}
+
+#[test]
+fn update_contract_config_permissionless_after_immediate_two_messages() {
+    let (mut deps, env) = setup_instantiated();
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        None,
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+    )
+    .expect("immediate first under owner_only");
+
+    update_liquidation_config(
+        &mut deps,
+        env,
+        None,
+        Some(LiquidationAccess::Permissionless),
+        None,
+    )
+    .expect("permissionless after immediate");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        contract.liquidation_access,
+        LiquidationAccess::Permissionless
+    );
+}
+
+#[test]
+fn update_contract_config_owner_only_and_deferred_in_one_message_from_permissionless() {
+    let (mut deps, env) = setup_instantiated();
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+    )
+    .expect("permissionless + immediate");
+
+    update_liquidation_config(
+        &mut deps,
+        env,
+        None,
+        Some(LiquidationAccess::OwnerOnly),
+        Some(BadDebtLossAllocation::DeferredToDeficit),
+    )
+    .expect("one message can restore owner_only + deferred");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(contract.liquidation_access, LiquidationAccess::OwnerOnly);
+    assert_eq!(
+        contract.bad_debt_loss_allocation,
+        BadDebtLossAllocation::DeferredToDeficit
+    );
+}
+
+#[test]
+fn update_contract_config_owner_only_then_deferred_two_messages() {
+    let (mut deps, env) = setup_instantiated();
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        Some(LiquidationAccess::Permissionless),
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+    )
+    .expect("permissionless + immediate");
+
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        Some(LiquidationAccess::OwnerOnly),
+        None,
+    )
+    .expect("owner_only first while still immediate");
+
+    update_liquidation_config(
+        &mut deps,
+        env,
+        None,
+        None,
+        Some(BadDebtLossAllocation::DeferredToDeficit),
+    )
+    .expect("deferred after owner_only");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        contract.bad_debt_loss_allocation,
+        BadDebtLossAllocation::DeferredToDeficit
+    );
+}
+
+#[test]
+fn update_contract_config_rejects_permissionless_while_deficit_positive() {
+    let (mut deps, env) = setup_instantiated();
+    update_liquidation_config(
+        &mut deps,
+        env.clone(),
+        None,
+        None,
+        Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
+    )
+    .expect("immediate under owner_only");
+
+    let mut r = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    r.deficit_underlying = 1;
+    set_reserve_state_v1(deps.as_mut().storage, &r).unwrap();
+
+    let err = update_liquidation_config(
+        &mut deps,
+        env,
+        None,
+        Some(LiquidationAccess::Permissionless),
+        None,
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("permissionless") && message.contains("deficit_underlying"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
 }
 
 #[test]

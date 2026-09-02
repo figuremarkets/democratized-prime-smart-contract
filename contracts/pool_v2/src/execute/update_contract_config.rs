@@ -6,11 +6,12 @@
 //! LTV bar and could make many positions liquidatable at once.
 //!
 //! **`bad_debt_loss_allocation`:** May only be changed when **`deficit_underlying`** is zero.
+//! Permissionless liquidation additionally requires **immediate** allocation and a zero deficit.
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
 use crate::model::{
-    ensure_permissionless_staleness_bound, BadDebtLossAllocation, LiquidationAccess,
+    ensure_permissionless_config, BadDebtLossAllocation, LiquidationAccess,
     MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
@@ -176,9 +177,12 @@ pub fn update_contract_config(
         contract.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
         illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
-    ensure_permissionless_staleness_bound(
+    let deficit_underlying = get_reserve_state_v1(deps.storage)?.deficit_underlying;
+    ensure_permissionless_config(
         contract.liquidation_access,
         contract.max_liquidation_staleness_seconds,
+        contract.bad_debt_loss_allocation,
+        deficit_underlying,
     )?;
 
     set_contract_state_v1(deps.storage, &contract)?;

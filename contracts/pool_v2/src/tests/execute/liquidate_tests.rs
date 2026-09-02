@@ -378,7 +378,12 @@ fn set_liquidation_access(
             max_liquidation_staleness_seconds: None,
             liquidation_access: Some(access),
             commit_market_id: None,
-            bad_debt_loss_allocation: None,
+            bad_debt_loss_allocation: match access {
+                LiquidationAccess::Permissionless => {
+                    Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut)
+                }
+                LiquidationAccess::OwnerOnly => None,
+            },
             custodian: None,
         },
     )

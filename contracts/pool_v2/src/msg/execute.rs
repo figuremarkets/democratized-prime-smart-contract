@@ -127,8 +127,9 @@ pub enum ExecuteMsg {
         /// [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).
         #[serde(default)]
         max_liquidation_staleness_seconds: Option<u64>,
-        /// Who may call Liquidate. Omitted / JSON `null` = no change. Rejected if last-known
-        /// would exceed [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].
+        /// Who may call Liquidate. Omitted / JSON `null` = no change. Permissionless requires
+        /// last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`],
+        /// immediate haircut, and `deficit_underlying == 0`.
         #[serde(default)]
         liquidation_access: Option<LiquidationAccess>,
     },
