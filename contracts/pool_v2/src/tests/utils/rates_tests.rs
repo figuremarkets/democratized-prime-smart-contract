@@ -6,8 +6,9 @@ use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
 use crate::utils::rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization, index_growth_factor,
     lender_rate_from_utilization, reserve_totals_and_cash_u128, time_elapsed_seconds,
+    underlying_to_scaled_liquidity,
 };
-use cosmwasm_std::{Decimal256, Timestamp};
+use cosmwasm_std::{Decimal256, Timestamp, Uint128, Uint256};
 use std::str::FromStr;
 
 /// Spreadsheet params: target 9%, min 3.25%, max 20%, kink 90%, reserve 0.5%, 31_536_000 s/year.
@@ -359,7 +360,7 @@ fn apply_pro_rata_liquidity_index_haircut_errors_when_loss_meets_total_liquidity
     assert_eq!(r.liquidity_index, Decimal256::one());
 }
 
-/// Near-total loss: factor \((L-1)/L\) is tiny but valid; index scales down without rounding up.
+/// Near-total loss: remaining 1 / scaled is tiny but valid.
 #[test]
 fn apply_pro_rata_liquidity_index_haircut_accepts_loss_one_below_total_liquidity() {
     let mut r = reserve(Decimal256::one(), Decimal256::one(), 1_000_000, 0);
@@ -368,33 +369,105 @@ fn apply_pro_rata_liquidity_index_haircut_accepts_loss_one_below_total_liquidity
     assert_eq!(r.liquidity_index, exp);
 }
 
-/// `liquidity_index` ≠ 1: expected index still matches `I × (L − loss) / L` with [`ReserveStateV1::total_liquidity`].
+/// `liquidity_index` ≠ 1: new index is remaining underlying / scaled shares.
 #[test]
 fn apply_pro_rata_liquidity_index_haircut_non_unit_index_matches_total_liquidity_formula() {
     let i0 = Decimal256::from_str("1.25").unwrap();
     let mut r = reserve(i0, Decimal256::one(), 4_000_000, 0);
-    let l = r.total_liquidity().unwrap();
     let loss = 100_000u128;
+    let exp = expected_haircut_index(&r, loss);
     apply_pro_rata_liquidity_index_haircut(&mut r, loss).unwrap();
-    let d = Decimal256::from_ratio(loss, 1u128);
-    let factor = l.checked_sub(d).unwrap().checked_div(l).unwrap();
-    let exp = i0.checked_mul(factor).unwrap();
     assert_eq!(r.liquidity_index, exp);
 }
 
-/// Fractional total liquidity (`scaled × index`): `loss` is compared to exact `L` in [`Decimal256`].
-/// Truncating division makes `I'` slightly **below** the real 0.1 (protocol-favorable vs rounding up).
+/// Fractional L: (2.2 − 2) / 2 = 0.1.
 #[test]
 fn apply_pro_rata_liquidity_index_haircut_with_fractional_total_liquidity() {
     let li = Decimal256::from_str("1.1").unwrap();
     let mut r = reserve(li, Decimal256::one(), 2, 0);
-    // L = 2 * 1.1 = 2.2; loss 2 < 2.2 ⇒ factor = floor((L-loss)/L); I' = li * factor
     apply_pro_rata_liquidity_index_haircut(&mut r, 2).unwrap();
-    let ideal = Decimal256::from_str("0.1").unwrap();
-    assert!(r.liquidity_index <= ideal);
-    assert_near(
-        r.liquidity_index,
-        ideal,
-        "haircut index should be ideal 0.1 minus at most trunc dust",
+    let exp = Decimal256::from_str("0.1").unwrap();
+    assert_eq!(r.liquidity_index, exp);
+}
+
+/// `(L − loss) / L` would floor to 0 here; remaining / scaled is `1e-18`.
+#[test]
+fn apply_pro_rata_liquidity_index_haircut_direct_formula_survives_factor_truncation() {
+    let scaled = 1_000_000_000_000_000_000u128; // 1e18
+    let mut r = reserve(
+        Decimal256::from_ratio(2u128, 1u128),
+        Decimal256::one(),
+        scaled,
+        0,
     );
+    let l = r.total_liquidity().unwrap();
+    let loss = 2_000_000_000_000_000_000u128 - 1; // L - 1
+    let d = Decimal256::from_ratio(Uint128::from(loss), Uint128::one());
+    assert!(l.checked_sub(d).unwrap().checked_div(l).unwrap().is_zero());
+
+    apply_pro_rata_liquidity_index_haircut(&mut r, loss).unwrap();
+    assert_eq!(
+        r.liquidity_index,
+        Decimal256::from_atomics(Uint256::from(1u128), 18).unwrap()
+    );
+    assert!(underlying_to_scaled_liquidity(1, r.liquidity_index).unwrap() > 0);
+}
+
+/// Remaining / scaled floors to 0 (loss = L − 1, scaled > 1e18): revert, index unchanged.
+#[test]
+fn apply_pro_rata_liquidity_index_haircut_errors_when_remaining_truncates_index_to_zero() {
+    let scaled = 1_000_000_000_000_000_001u128; // 1e18 + 1
+    let mut r = reserve(Decimal256::one(), Decimal256::one(), scaled, 0);
+    let loss = scaled - 1;
+    let index_before = r.liquidity_index;
+
+    let err = apply_pro_rata_liquidity_index_haircut(&mut r, loss).unwrap_err();
+    match &err {
+        ContractError::IllegalStateError { message } => {
+            assert!(
+                message.contains("truncate liquidity_index to zero"),
+                "{}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalStateError, got {:?}", err),
+    }
+    assert_eq!(r.liquidity_index, index_before);
+
+    apply_pro_rata_liquidity_index_haircut(&mut r, loss - 1).unwrap();
+    assert!(!r.liquidity_index.is_zero());
+    assert!(underlying_to_scaled_liquidity(1, r.liquidity_index).unwrap() > 0);
+}
+
+/// Fractional L > 1e18 with loss = floor(L): `loss < L` but new index floors to 0.
+#[test]
+fn apply_pro_rata_liquidity_index_haircut_errors_when_floor_loss_on_fractional_l_truncates() {
+    let scaled = 1_000_000_000_000_000_001u128; // 1e18 + 1
+    let li = Decimal256::from_str("1.5").unwrap();
+    let mut r = reserve(li, Decimal256::one(), scaled, 0);
+    let l = r.total_liquidity().unwrap();
+    let loss = 1_500_000_000_000_000_001u128; // floor(1.5 * (1e18+1))
+    let d = Decimal256::from_ratio(Uint128::from(loss), Uint128::one());
+    assert!(d < l);
+    let index_before = r.liquidity_index;
+
+    let err = apply_pro_rata_liquidity_index_haircut(&mut r, loss).unwrap_err();
+    match &err {
+        ContractError::IllegalStateError { message } => {
+            assert!(
+                message.contains("truncate liquidity_index to zero"),
+                "{}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalStateError, got {:?}", err),
+    }
+    assert_eq!(r.liquidity_index, index_before);
+}
+
+fn expected_haircut_index(r: &ReserveStateV1, loss: u128) -> Decimal256 {
+    let l = r.total_liquidity().unwrap();
+    let d = Decimal256::from_ratio(Uint128::from(loss), Uint128::one());
+    let scaled = Decimal256::from_atomics(Uint256::from(r.total_scaled_liquidity), 0).unwrap();
+    l.checked_sub(d).unwrap().checked_div(scaled).unwrap()
 }
