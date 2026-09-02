@@ -10,7 +10,8 @@
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
 use crate::model::{
-    BadDebtLossAllocation, LiquidationAccess, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+    ensure_permissionless_staleness_bound, BadDebtLossAllocation, LiquidationAccess,
+    MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
 use crate::utils::assert_custodian;
@@ -175,6 +176,10 @@ pub fn update_contract_config(
         contract.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
         illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
+    ensure_permissionless_staleness_bound(
+        contract.liquidation_access,
+        contract.max_liquidation_staleness_seconds,
+    )?;
 
     set_contract_state_v1(deps.storage, &contract)?;
     Response::new()

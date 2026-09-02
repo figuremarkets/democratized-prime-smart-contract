@@ -341,7 +341,7 @@
               ]
             },
             "liquidation_access": {
-              "description": "Who may call Liquidate. Omitted / JSON `null` = no change.",
+              "description": "Who may call Liquidate. Omitted / JSON `null` = no change. Rejected if last-known would exceed [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].",
               "default": null,
               "anyOf": [
                 {
@@ -391,7 +391,7 @@
               "minimum": 0.0
             },
             "max_liquidation_staleness_seconds": {
-              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].",
+              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (owner-only) or [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).",
               "default": null,
               "type": [
                 "integer",
@@ -777,7 +777,7 @@
       ]
     },
     "LiquidationAccess": {
-      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. Do not enable [`Self::Permissionless`] against [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`]: last-known then becomes an extractable strategy. Paused still blocks Liquidate for everyone.",
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] is rejected when last-known exceeds [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (see [`ensure_permissionless_staleness_bound`]). Paused still blocks Liquidate for everyone.",
       "oneOf": [
         {
           "description": "Only the cw-ownable owner may liquidate (current production posture).",

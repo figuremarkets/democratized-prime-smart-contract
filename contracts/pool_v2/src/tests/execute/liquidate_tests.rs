@@ -2,7 +2,8 @@
 //! borrower must be liquidatable, minimum repay to reach healthy LTV, 2% collateral bonus.
 
 use crate::constants::{
-    ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_SCALED_AMOUNT,
+    ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS,
+    ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::contract::execute;
 use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR};
@@ -386,20 +387,57 @@ fn set_liquidation_access(
 
 #[test]
 fn liquidate_permissionless_allows_non_owner() {
-    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+    let (mut deps, env, debt_amount, collateral_amount) = setup_liquidatable_borrower();
     set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
 
-    let min_repay = 374u128;
-    execute(
+    // Send more than debt so we also get a refund BankMsg, both must target OTHER not OWNER.
+    let sent = 1000u128;
+    assert!(sent > debt_amount, "test sends more than debt");
+    let seize_units = 730u128;
+    let mut to_seize = BTreeMap::new();
+    to_seize.insert(COLLATERAL_DENOM.to_string(), Uint128::new(seize_units));
+
+    let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(OTHER), &[coin(sent, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
-            collateral_to_seize: collateral_to_seize_success(),
+            collateral_to_seize: to_seize,
         },
     )
     .expect("any sender may liquidate when access is permissionless");
+
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_LIQUIDATION_ACCESS)
+            .map(|a| a.value.as_str()),
+        Some(LiquidationAccess::Permissionless.as_str())
+    );
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OTHER);
+            assert_ne!(to_address.as_str(), OWNER);
+            assert_eq!(amount.len(), 1);
+            assert_eq!(amount[0].denom, COLLATERAL_DENOM);
+            assert_eq!(amount[0].amount.u128(), seize_units);
+            assert!(seize_units <= collateral_amount);
+        }
+        _ => panic!("expected first message BankMsg::Send (collateral)"),
+    }
+    let actual_repay: u128 = res.attributes[3].value.parse().unwrap();
+    match &res.messages[1].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OTHER);
+            assert_ne!(to_address.as_str(), OWNER);
+            assert_eq!(amount.len(), 1);
+            assert_eq!(amount[0].denom, LENDING_DENOM);
+            assert_eq!(amount[0].amount.u128(), sent - actual_repay);
+        }
+        _ => panic!("expected second message BankMsg::Send (excess refund)"),
+    }
 }
 
 #[test]

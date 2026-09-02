@@ -1,9 +1,9 @@
-use cosmwasm_std::{Addr, Decimal256, Uint128};
+use cosmwasm_std::{ensure, Addr, Decimal256, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::model::collateral::CollateralAssetV1;
-use crate::model::error::{illegal_state, ContractError};
+use crate::model::error::{illegal_argument, illegal_state, ContractError};
 use crate::model::{Denom, RateParamsV1};
 
 /// Default outer bound on last-known oracle prices used for liquidation (1 hour).
@@ -13,16 +13,44 @@ use crate::model::{Denom, RateParamsV1};
 ///
 /// Borrow / RemoveCollateral still require a **fresh** lending-denom price and give no
 /// credit for stale collateral (oracle staleness threshold, typically tens of seconds).
-/// Liquidation may use last-known prices up to this bound. Do not enable permissionless
-/// liquidation against [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
+/// Liquidation may use last-known prices up to this bound. Owner-only may raise it up to
+/// [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`]; permissionless is capped at
+/// [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].
 pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 60 * 60;
 
 /// Hard cap so a custodian cannot restore last-known prices into "this quote is
-/// meaningless" territory.
+/// meaningless" territory. Applies only under [`LiquidationAccess::OwnerOnly`].
 pub const MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS: u64 = 24 * 60 * 60;
+
+/// Last-known window allowed with [`LiquidationAccess::Permissionless`]. Same as the
+/// default: at 50% annual vol, ~1h drift stays inside a 2% bonus; 24h does not.
+pub const MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS: u64 =
+    DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS;
 
 const _: () =
     assert!(DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS);
+const _: () = assert!(
+    MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS
+);
+
+/// Reject permissionless liquidation when last-known exceeds
+/// [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`]. Call after applying config so
+/// either field-order is caught (raise staleness while permissionless, or enable
+/// permissionless while staleness is already high).
+pub fn ensure_permissionless_staleness_bound(
+    access: LiquidationAccess,
+    max_liquidation_staleness_seconds: u64,
+) -> Result<(), ContractError> {
+    if access == LiquidationAccess::Permissionless {
+        ensure!(
+            max_liquidation_staleness_seconds <= MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
+            illegal_argument(
+                "max_liquidation_staleness_seconds too high for permissionless liquidation"
+            )
+        );
+    }
+    Ok(())
+}
 
 pub fn default_max_liquidation_staleness_seconds() -> u64 {
     DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS
@@ -42,9 +70,9 @@ pub enum BadDebtLossAllocation {
 }
 
 /// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only.
-/// Do not enable [`Self::Permissionless`] against
-/// [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`]: last-known then becomes an extractable
-/// strategy. Paused still blocks Liquidate for everyone.
+/// [`Self::Permissionless`] is rejected when last-known exceeds
+/// [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (see
+/// [`ensure_permissionless_staleness_bound`]). Paused still blocks Liquidate for everyone.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LiquidationAccess {

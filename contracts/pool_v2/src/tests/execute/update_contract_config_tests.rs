@@ -10,6 +10,7 @@ use crate::model::error::ContractError;
 use crate::model::{
     BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, OperationalState,
     RateParamsV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+    MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1};
@@ -173,6 +174,133 @@ fn update_contract_config_sets_liquidation_access() {
     assert_eq!(
         contract.liquidation_access,
         LiquidationAccess::Permissionless
+    );
+}
+
+fn update_staleness_and_access(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: Env,
+    max_liquidation_staleness_seconds: Option<u64>,
+    liquidation_access: Option<LiquidationAccess>,
+) -> Result<Response, ContractError> {
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds,
+            liquidation_access,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+        },
+    )
+}
+
+fn assert_permissionless_staleness_rejected(err: ContractError) {
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains(
+                    "max_liquidation_staleness_seconds too high for permissionless liquidation"
+                ),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn update_contract_config_rejects_permissionless_when_staleness_already_above_bound() {
+    let (mut deps, env) = setup_instantiated();
+    update_staleness_and_access(
+        &mut deps,
+        env.clone(),
+        Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
+        None,
+    )
+    .expect("owner_only may use the 24h cap");
+
+    let err = update_staleness_and_access(
+        &mut deps,
+        env,
+        None,
+        Some(LiquidationAccess::Permissionless),
+    )
+    .unwrap_err();
+    assert_permissionless_staleness_rejected(err);
+}
+
+#[test]
+fn update_contract_config_rejects_raising_staleness_while_permissionless() {
+    let (mut deps, env) = setup_instantiated();
+    update_staleness_and_access(
+        &mut deps,
+        env.clone(),
+        None,
+        Some(LiquidationAccess::Permissionless),
+    )
+    .expect("permissionless allowed at the 1h default");
+
+    let err = update_staleness_and_access(
+        &mut deps,
+        env,
+        Some(MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS + 1),
+        None,
+    )
+    .unwrap_err();
+    assert_permissionless_staleness_rejected(err);
+}
+
+#[test]
+fn update_contract_config_rejects_permissionless_and_24h_in_one_message() {
+    let (mut deps, env) = setup_instantiated();
+    let err = update_staleness_and_access(
+        &mut deps,
+        env,
+        Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
+        Some(LiquidationAccess::Permissionless),
+    )
+    .unwrap_err();
+    assert_permissionless_staleness_rejected(err);
+}
+
+#[test]
+fn update_contract_config_permissionless_and_1h_in_one_message_from_24h_owner_only() {
+    let (mut deps, env) = setup_instantiated();
+    update_staleness_and_access(
+        &mut deps,
+        env.clone(),
+        Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
+        None,
+    )
+    .expect("owner_only may use the 24h cap");
+
+    update_staleness_and_access(
+        &mut deps,
+        env,
+        Some(MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS),
+        Some(LiquidationAccess::Permissionless),
+    )
+    .expect("applying both fields then checking allows tightening last-known with permissionless");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        contract.liquidation_access,
+        LiquidationAccess::Permissionless
+    );
+    assert_eq!(
+        contract.max_liquidation_staleness_seconds,
+        MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS
     );
 }
 

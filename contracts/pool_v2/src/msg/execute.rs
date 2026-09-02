@@ -123,10 +123,12 @@ pub enum ExecuteMsg {
         custodian: Option<String>,
         /// Seconds past oracle expiration after which a stored price is unpriceable for
         /// liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be
-        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
+        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (owner-only) or
+        /// [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).
         #[serde(default)]
         max_liquidation_staleness_seconds: Option<u64>,
-        /// Who may call Liquidate. Omitted / JSON `null` = no change.
+        /// Who may call Liquidate. Omitted / JSON `null` = no change. Rejected if last-known
+        /// would exceed [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].
         #[serde(default)]
         liquidation_access: Option<LiquidationAccess>,
     },

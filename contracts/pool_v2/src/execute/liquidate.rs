@@ -27,7 +27,8 @@
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION,
     ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_BORROWER, ATTRIBUTE_COLLATERAL_JSON,
-    ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATOR, ATTRIBUTE_SCALED_AMOUNT,
+    ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS, ATTRIBUTE_LIQUIDATOR,
+    ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
@@ -392,6 +393,10 @@ pub fn liquidate(
         .add_attribute(
             ATTRIBUTE_COLLATERAL_JSON,
             serde_json::to_string(&collateral_json).unwrap_or_default(),
+        )
+        .add_attribute(
+            ATTRIBUTE_LIQUIDATION_ACCESS,
+            contract.liquidation_access.as_str(),
         );
     if bad_debt {
         res = res
