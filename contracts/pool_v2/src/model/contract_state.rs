@@ -6,19 +6,20 @@ use crate::model::collateral::CollateralAssetV1;
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{Denom, RateParamsV1};
 
-/// Default outer bound on last-known oracle prices used for liquidation (24 hours).
-/// Shorter than a week so a frozen feed cannot be farmed for long; longer than the
-/// oracle freshness window so a brief outage does not freeze liquidations.
-/// `0` means any expired price is unpriceable (last-known disabled).
+/// Default outer bound on last-known oracle prices used for liquidation (1 hour).
+/// Long enough to ride out an ordinary oracle interruption (~120× a 30s heartbeat);
+/// short enough that a frozen feed cannot be farmed. `0` means any expired price
+/// is unpriceable (last-known disabled).
 ///
 /// Borrow / RemoveCollateral still require a **fresh** lending-denom price and give no
 /// credit for stale collateral (oracle staleness threshold, typically tens of seconds).
 /// Liquidation may use last-known prices up to this bound. Do not enable permissionless
 /// liquidation against [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
-pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 24 * 60 * 60;
+pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 60 * 60;
 
-/// Hard cap so a custodian cannot restore unbounded last-known prices (`u64::MAX`).
-pub const MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS: u64 = 7 * 24 * 60 * 60;
+/// Hard cap so a custodian cannot restore last-known prices into "this quote is
+/// meaningless" territory.
+pub const MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS: u64 = 24 * 60 * 60;
 
 const _: () =
     assert!(DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS);
@@ -135,7 +136,7 @@ pub struct ContractStateV1 {
 
     /// Seconds past oracle expiration after which a stored price is unpriceable for
     /// liquidation (valued at $0, not seizable). Fresh prices and last-known prices still
-    /// within this bound remain usable. Default 24 hours; capped at 7 days. `0` disables
+    /// within this bound remain usable. Default 1 hour; capped at 24 hours. `0` disables
     /// last-known prices.
     #[serde(rename = "mlss", default = "default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,

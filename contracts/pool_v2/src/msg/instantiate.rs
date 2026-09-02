@@ -63,7 +63,7 @@ pub struct InstantiateMsg {
     /// The account serving as the custodian of contract operations.
     pub custodian: String,
     /// Seconds past oracle expiration after which a stored price is unpriceable for
-    /// liquidation. Omitted JSON uses 24 hours (capped at 7 days). `0` disables last-known prices.
+    /// liquidation. Omitted JSON uses 1 hour (capped at 24 hours). `0` disables last-known prices.
     #[serde(default = "crate::model::contract_state::default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
 }

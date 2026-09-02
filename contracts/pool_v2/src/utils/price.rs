@@ -113,7 +113,7 @@ fn liquidation_price_too_old(price: &AssetPriceResponseV1, now: Timestamp, max_s
 }
 
 /// Prices for liquidation. A stored price is used even if stale, as long as it is still within
-/// [`ContractStateV1::max_liquidation_staleness_seconds`] of expiration (last-known, Aave-style).
+/// [`ContractStateV1::max_liquidation_staleness_seconds`] of expiration (last-known).
 /// The lending denom must have a stored price within that bound. Collateral with no stored price,
 /// a zero stored price, or last-known older than the bound, is omitted and listed in
 /// [`LiquidationPrices::unpriceable`].

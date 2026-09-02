@@ -47,7 +47,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
-        max_liquidation_staleness_seconds: 86400,
+        max_liquidation_staleness_seconds: 3600,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128),
@@ -126,7 +126,7 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
             min_lend: None,
             min_borrow: None,
             max_borrower_collateral_types: None,
-            max_liquidation_staleness_seconds: Some(3_600),
+            max_liquidation_staleness_seconds: Some(MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS),
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
@@ -135,7 +135,10 @@ fn update_contract_config_sets_max_liquidation_staleness_seconds() {
     .expect("update_contract_config should succeed");
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(contract.max_liquidation_staleness_seconds, 3_600);
+    assert_eq!(
+        contract.max_liquidation_staleness_seconds,
+        MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS
+    );
 }
 
 #[test]
