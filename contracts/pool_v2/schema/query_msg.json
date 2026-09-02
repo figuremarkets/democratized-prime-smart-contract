@@ -52,7 +52,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Collateral required for a given loan amount (for UI). Per-asset `required` entries include `satisfiable` so amount 0 is not confused with an unquotable feed.",
+      "description": "Collateral required for a given loan amount (for UI). Per-asset `required` entries include `satisfiable` so amount 0 is not confused with an unquotable feed. When `borrower` is set, held denoms omitted from existing-collateral credit are named in `unpriceable_collateral`.",
       "type": "object",
       "required": [
         "get_collateral_requirements"

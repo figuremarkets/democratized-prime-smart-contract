@@ -184,7 +184,7 @@ No “raw” underlying balances are stored for lend/borrow; only scaled amounts
 - **GetBorrowerPosition(address)** – Borrower position: debt (scaled + underlying + display), `collateral` (per-asset amounts; `satisfiable` is false on holdings omitted from USD), `unpriceable_collateral` (held denoms omitted from the USD total because the feed is missing, zero, or stale), `collateral_value_usd`, `loan_to_value`, and `health` (healthy / unhealthy / liquidatable / no_collateral / unknown). Uses oracle for prices.
 - **Lender balance:** The pool does not expose a BalanceOf query. Query the **repo_token_cw20** contract (address in GetState) with the standard CW20 **Balance** (and **TokenInfo** for total supply); when the CW20's pool_address is set, it returns underlying amounts.
 - **Displaying amounts:** Use the CW20 Balance/TokenInfo for lent supply; use `underlying_debt_display` from GetBorrowerPosition for debt. Pair with `lending_denom.name` for the unit label.
-- **GetCollateralRequirements** – Optional borrower, new loan amount, and collateral asset ids. Returns required total collateral value (USD), additional value needed (when borrower set), and per-asset minimum amounts with `satisfiable` so amount 0 is not confused with an unquotable feed. See **Section 6.2** for the full flow.
+- **GetCollateralRequirements** – Optional borrower, new loan amount, and collateral asset ids. Returns required total collateral value (USD), additional value needed (when borrower set), per-asset minimum amounts with `satisfiable` so amount 0 is not confused with an unquotable feed, and `unpriceable_collateral` (held denoms omitted from that additional-needed credit). See **Section 6.2** for the full flow.
 - **GetLenderStatus(address)** – Returns **require_commit_on_exit**: whether this address must pass commit_funds: true to withdraw and is blocked from Transfer/TransferExact.
 
 ---
@@ -327,7 +327,7 @@ Answers: “How much collateral do I need to borrow this much?” Inputs: option
 
 **Per-asset minimums:** For each requested collateral asset, the minimum amount is **additional value needed** (or full required value when no borrower) divided by (price × haircut) for that asset, rounded up. So when a borrower is set, the amounts are “how much **more** of each asset to add.”
 
-**Response:** **required_collateral_value_usd**, **additional_collateral_value_usd** (use for “you need $X more” or to combine assets), and **required**: (asset_id, min_amount, satisfiable) per asset. `satisfiable` is false when a positive requirement could not be quoted (stale/missing/zero price, zero haircut, or units that do not fit `u128`); amount 0 with `satisfiable` true means need none. A UI can show total required, additional needed, and per-asset minimums.
+**Response:** **required_collateral_value_usd**, **additional_collateral_value_usd** (use for “you need $X more” or to combine assets), **required**: (asset_id, min_amount, satisfiable) per requested asset, and **unpriceable_collateral**: held denoms omitted from the existing-collateral credit (same shape as GetBorrowerPosition; they may not appear in `required`). `satisfiable` is false when a positive requirement could not be quoted; the flag is deliberately coarse (down feed vs zero haircut vs unrepresentable units). Amount 0 with `satisfiable` true means need none. A UI can show total required, additional needed, and per-asset minimums.
 
 ---
 

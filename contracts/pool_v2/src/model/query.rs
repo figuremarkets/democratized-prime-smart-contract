@@ -13,11 +13,14 @@ use std::convert::TryFrom;
 use std::str::FromStr;
 
 /// Per-asset amount in GetCollateralRequirements, GetBorrowerPosition, and GetState.
+/// The shared type is intentional; splitting it would be a breaking API change.
 ///
 /// `satisfiable` is whether this row is a usable figure:
 /// - GetCollateralRequirements: `true` if `amount` is a real quote (including 0 additional
 ///   needed); `false` if a positive requirement could not be quoted (missing/stale/zero
-///   price, zero haircut, or units that do not fit `u128`).
+///   price, zero haircut, or units that do not fit `u128`). The flag is deliberately coarse:
+///   it does not distinguish a transient down feed from a permanent condition (zero haircut
+///   or unrepresentable units).
 /// - GetBorrowerPosition: `true` if this holding was priced into USD/LTV.
 /// - GetState: always `true` (pool holdings, not a quote).
 ///
@@ -152,8 +155,15 @@ pub struct CollateralRequirementsResponseV1 {
     /// Additional collateral value in USD the user must add. Equals required total when no borrower; when borrower is set, total minus their existing collateral. Use this to combine assets (any mix whose haircutted value ≥ this).
     pub additional_collateral_value_usd: String,
     /// Per-asset minimum amount. When borrower is set these are *additional* amounts needed; otherwise the amount of each asset that would satisfy the full requirement alone.
-    /// `satisfiable` is false when a positive requirement could not be quoted (stale/missing/zero price, zero haircut, or units that do not fit `u128`).
+    /// `satisfiable` is false when a positive requirement could not be quoted. The flag is
+    /// deliberately coarse (down feed vs zero haircut vs unrepresentable units).
     pub required: Vec<AssetRequirementV1>,
+    /// Held collateral denoms omitted from the existing-collateral credit that reduces
+    /// [`Self::additional_collateral_value_usd`] because the stored oracle price is missing,
+    /// zero, or stale. Empty when `borrower` is unset or every held asset was priced.
+    /// Those denoms may be absent from [`Self::required`] when they were not requested.
+    #[serde(default)]
+    pub unpriceable_collateral: Vec<String>,
 }
 
 /// Response for the GetLenderStatus query. Supply balance comes from repo_token_cw20 Balance (and TokenInfo) query.

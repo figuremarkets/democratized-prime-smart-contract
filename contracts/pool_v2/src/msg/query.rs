@@ -20,7 +20,9 @@ pub enum QueryMsg {
     #[returns(BorrowerPositionResponseV1)]
     GetBorrowerPosition { address: String },
     /// Collateral required for a given loan amount (for UI). Per-asset `required` entries
-    /// include `satisfiable` so amount 0 is not confused with an unquotable feed.
+    /// include `satisfiable` so amount 0 is not confused with an unquotable feed. When
+    /// `borrower` is set, held denoms omitted from existing-collateral credit are named in
+    /// `unpriceable_collateral`.
     #[returns(CollateralRequirementsResponseV1)]
     GetCollateralRequirements {
         borrower: Option<String>,

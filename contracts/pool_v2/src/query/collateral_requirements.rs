@@ -3,7 +3,9 @@
 //! Returns required collateral value (USD, after haircuts) and per-asset minimum amounts.
 //! When `borrower` is set: existing debt is included in the required total, and existing
 //! collateral is subtracted so per-asset amounts are the *additional* collateral needed.
-//! Per-asset `satisfiable` is false when a positive requirement could not be quoted.
+//! Held denoms omitted from that credit are named in `unpriceable_collateral`.
+//! Per-asset `satisfiable` is false when a positive requirement could not be quoted
+//! (deliberately coarse: down feed vs zero haircut vs unrepresentable units).
 
 use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
@@ -36,6 +38,7 @@ pub fn query_collateral_requirements(
                 .iter()
                 .map(|id| AssetRequirementV1::quoted(id.clone(), Uint128::zero()))
                 .collect(),
+            unpriceable_collateral: Vec::new(),
         })
         .map_err(QueryError::Std);
     }
@@ -145,10 +148,22 @@ pub fn query_collateral_requirements(
         required.push(req);
     }
 
+    let unpriceable_collateral = borrower_collateral_opt
+        .as_ref()
+        .map(|bc| {
+            bc.amounts
+                .keys()
+                .filter(|id| !prices.contains_key(*id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+
     to_json_binary(&CollateralRequirementsResponseV1 {
         required_collateral_value_usd: required_collateral_value_usd.to_string(),
         additional_collateral_value_usd: value_to_cover.to_string(),
         required,
+        unpriceable_collateral,
     })
     .map_err(QueryError::Std)
 }
