@@ -576,7 +576,7 @@ fn borrow_fails_when_oracle_price_is_stale_for_collateral_asset() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(
-                message.contains("Loan-to-value") || message.contains("No collateral for loans"),
+                message.contains("Loan-to-value"),
                 "stale collateral is valued at $0 so borrow has no credit: {}",
                 message
             );

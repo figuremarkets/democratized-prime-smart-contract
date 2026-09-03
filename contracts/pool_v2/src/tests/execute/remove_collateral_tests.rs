@@ -321,7 +321,7 @@ fn remove_collateral_of_stale_asset_is_gated_on_remaining_priced_collateral() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(
-                message.contains("No collateral for loans") || message.contains("Loan-to-value"),
+                message.contains("Loan-to-value"),
                 "remaining stale collateral must not count as credit: {}",
                 message
             );
@@ -543,11 +543,7 @@ fn remove_collateral_fails_remove_all_with_debt() {
 
     match &err {
         ContractError::IllegalArgumentError { message } => {
-            assert!(
-                message.contains("Loan-to-value") || message.contains("No collateral for loans"),
-                "message: {}",
-                message
-            );
+            assert!(message.contains("Loan-to-value"), "message: {}", message);
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
