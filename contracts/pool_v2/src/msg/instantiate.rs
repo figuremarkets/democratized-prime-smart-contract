@@ -31,10 +31,10 @@ pub struct InstantiateMsg {
     pub lending_denom: Denom,
     pub rate_params: RateParamsV1,
     /// Attribute names for lending: sender must have all of these (Provenance attributes).
-    /// - Empty list = no attribute required.
+    /// Matching follows marker `--required-attributes` conventions. Empty list = no check.
     pub lender_required_attrs: Vec<String>,
     /// Attribute names for borrowing: sender must have all of these.
-    /// - Empty list = no attribute required.
+    /// Matching follows marker `--required-attributes` conventions. Empty list = no check.
     pub borrower_required_attrs: Vec<String>,
     /// Price oracle contract address.
     /// - Must be a valid bech32 address.

@@ -22,7 +22,8 @@ use cosmwasm_std::{
 use cw20::Cw20ReceiveMsg;
 use provwasm_mocks::mock_provenance_dependencies;
 use provwasm_std::types::provenance::attribute::v1::{
-    QueryAttributeRequest, QueryAttributeResponse,
+    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse, QueryScanRequest,
+    QueryScanResponse,
 };
 use std::str::FromStr;
 
@@ -618,4 +619,52 @@ fn transfer_fails_when_require_commit_on_exit() {
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
+}
+
+#[test]
+fn transfer_succeeds_when_recipient_has_wildcard_lender_attr() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+    let mut msg = default_instantiate_msg();
+    msg.lender_required_attrs = vec!["*.kyb.pb".to_string()];
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate should succeed");
+
+    let scan_response = QueryScanResponse {
+        account: RECIPIENT.to_string(),
+        attributes: vec![Attribute {
+            name: "xyz.kyb.pb".to_string(),
+            value: b"verified".to_vec(),
+            attribute_type: AttributeType::String.into(),
+            address: "".to_string(),
+            expiration_date: None,
+            concrete_type: "".to_owned(),
+        }],
+        pagination: None,
+    };
+    QueryScanRequest::mock_response(&mut deps.querier, scan_response);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
+        ExecuteMsg::Receive(Cw20ReceiveMsg {
+            sender: SENDER.to_string(),
+            amount: Uint128::from(5_000_000u128),
+            msg: to_json_binary(&Cw20ReceivePayload::Transfer {
+                recipient: RECIPIENT.to_string(),
+                amount: Uint128::new(5_000_000),
+            })
+            .unwrap(),
+        }),
+    )
+    .expect("transfer should succeed with wildcard lender attr");
+
+    assert_eq!(res.attributes[0].value, ACTION);
 }

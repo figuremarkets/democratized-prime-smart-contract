@@ -19,7 +19,8 @@ use cosmwasm_std::testing::{message_info, mock_env};
 use cosmwasm_std::{coin, Addr, CosmosMsg, Decimal256, Uint128, WasmMsg};
 use provwasm_mocks::mock_provenance_dependencies;
 use provwasm_std::types::provenance::attribute::v1::{
-    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse,
+    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse, QueryScanRequest,
+    QueryScanResponse,
 };
 
 fn mock_empty_attribute_response(
@@ -249,4 +250,42 @@ fn lend_succeeds_when_lender_attr_required_and_present() {
         reserve.total_scaled_liquidity.to_string()
     );
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
+}
+
+#[test]
+fn lend_succeeds_when_wildcard_lender_attr_matches() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    let scan_response = QueryScanResponse {
+        account: LENDER.to_string(),
+        attributes: vec![Attribute {
+            name: "figure.kyb.pb".to_string(),
+            value: b"verified".to_vec(),
+            attribute_type: AttributeType::String.into(),
+            address: "".to_string(),
+            expiration_date: None,
+            concrete_type: "".to_owned(),
+        }],
+        pagination: None,
+    };
+    QueryScanRequest::mock_response(&mut deps.querier, scan_response);
+
+    let mut msg = default_instantiate_msg();
+    msg.lender_required_attrs = vec!["*.kyb.pb".to_string()];
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate should succeed");
+
+    let amount = Uint128::new(50_000_000);
+    let info = message_info(
+        &Addr::unchecked(LENDER),
+        &[coin(amount.u128(), LENDING_DENOM)],
+    );
+    execute(deps.as_mut(), env, info, ExecuteMsg::Lend {}).expect("lend should succeed");
 }

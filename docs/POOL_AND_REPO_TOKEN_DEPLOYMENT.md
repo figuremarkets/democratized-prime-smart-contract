@@ -95,7 +95,7 @@ Symbols are conventionally **all caps** (e.g. HPYLDS, PUSD, METH). For other len
 | `repo_token`    | `{ "existing": { "repo_token_cw20_contract_address": "<CW20 from Step A1>" } }`                                                                                                                                                                                                    |
 | `lending_denom` | Lending denom and precision.                                                                                                                                                                                                                                                       |
 | `rate_params`   | Kink model parameters.                                                                                                                                                                                                                                                             |
-| (other fields)  | Oracle, collateral, margin/liquidation, etc. **`lender_required_attrs` / `borrower_required_attrs`:** list of attribute names; sender must have **all** of these (empty list = no check). Can be updated later by admin via **SetLenderRequiredAttrs** / **SetBorrowerRequiredAttrs**. |
+| (other fields)  | Oracle, collateral, margin/liquidation, etc. **`lender_required_attrs` / `borrower_required_attrs`:** list of attribute names; sender must have **all** of these (empty list = no check). Matching follows marker `--required-attributes` conventions. Can be updated later by admin via **SetLenderRequiredAttrs** / **SetBorrowerRequiredAttrs**. |
 
 
 `rate_params` fee-model fields:

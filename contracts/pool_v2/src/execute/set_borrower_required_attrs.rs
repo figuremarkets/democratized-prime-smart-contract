@@ -7,7 +7,7 @@ use crate::constants::{
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
 use crate::model::ContractStateV1;
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
-use crate::utils::assert_custodian;
+use crate::utils::{assert_custodian, validate_required_attr_patterns};
 use cosmwasm_std::{ensure, DepsMut, Env, MessageInfo, Response};
 use result_extensions::ResultExtensions;
 
@@ -33,6 +33,7 @@ pub fn set_borrower_required_attrs(
             MAX_LENDER_BORROWER_REQUIRED_ATTRS
         ))
     );
+    validate_required_attr_patterns(&borrower_required_attrs)?;
     contract.borrower_required_attrs = borrower_required_attrs.clone();
     set_contract_state_v1(deps.storage, &contract)?;
     Response::new()
