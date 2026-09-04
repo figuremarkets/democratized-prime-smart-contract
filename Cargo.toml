@@ -15,6 +15,7 @@ authors = [
 ]
 edition = "2018"
 repository = "https://github.com/figuremarkets/democratized-prime-smart-contract"
+publish = false
 
 [profile.release]
 opt-level = "z"
