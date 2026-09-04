@@ -51,7 +51,11 @@ pub fn get_health_from_ltv(
     BorrowerHealthV1::Healthy.to_ok()
 }
 
-/// LTV = debt_value_usd / collateral_value_usd. Errors if no collateral but debt > 0.
+/// LTV = debt_value_usd / collateral_value_usd.
+///
+/// Positive debt with zero haircutted collateral is unbounded LTV: returns 1 so the
+/// position classifies Liquidatable (`liquidation_rate` is always ≤ 1 in config).
+/// Borrow and RemoveCollateral fail closed on that health.
 pub fn calculate_ltv(
     contract_state: &ContractStateV1,
     supported_assets: &[CollateralAssetV1],
@@ -71,15 +75,10 @@ pub fn calculate_ltv(
         return Decimal256::zero().to_ok();
     }
     if total_collateral_value_usd.is_zero() {
-        // TODO(sc-542885): return Decimal256::one() so an all-unpriceable bag with debt is
-        // Liquidatable (needed by write_off). Borrow/RemoveCollateral fail closed either way.
-        return illegal_argument(format!(
-            "No collateral for loans [debt value {}]",
-            borrow_balance_usd
-        ))
-        .to_err();
+        // Unbounded LTV. 1 is always >= liquidation_rate (config enforces rate <= 1), so the
+        // position classifies Liquidatable; Borrow/RemoveCollateral fail closed on that health.
+        return Decimal256::one().to_ok();
     }
-    // Guard above ensures no divide-by-zero (empty collateral amounts).
     borrow_balance_usd
         .checked_div(total_collateral_value_usd)
         .map_err(ContractError::from)

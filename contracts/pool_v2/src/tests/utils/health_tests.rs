@@ -8,7 +8,7 @@ use crate::model::{Denom, OperationalState, RateParamsV1};
 use crate::tests::query::common::CUSTODIAN;
 use crate::utils::{
     calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_value_usd,
-    get_health_from_ltv, validate_borrower_is_healthy,
+    get_borrower_health, get_health_from_ltv, validate_borrower_is_healthy,
 };
 use cosmwasm_std::{Addr, Decimal256, Uint128};
 use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
@@ -249,25 +249,30 @@ fn ltv_zero_debt_zero_collateral() {
 }
 
 #[test]
-fn ltv_no_collateral_with_debt_errors() {
+fn ltv_no_collateral_with_debt_is_sentinel_one() {
     let state = contract_state("0.80", "0.90");
     let collateral = BorrowerCollateralV1::default();
     let mut prices = PriceMapResponse::new();
     prices.insert("lend".to_string(), price_entry("1.0"));
-    let err = calculate_ltv(
+    let ltv = calculate_ltv(
         &state,
         &state.supported_collateral_assets,
         &prices,
         &collateral,
         Uint128::new(100),
     )
-    .unwrap_err();
-    match &err {
-        ContractError::IllegalArgumentError { message } => {
-            assert!(message.contains("No collateral for loans"));
-        }
-        _ => panic!("expected IllegalArgumentError, got {:?}", err),
-    }
+    .unwrap();
+    assert_eq!(ltv, Decimal256::one());
+    let (health, health_ltv) = get_borrower_health(
+        &state,
+        &state.supported_collateral_assets,
+        &prices,
+        &collateral,
+        Uint128::new(100),
+    )
+    .unwrap();
+    assert_eq!(health, BorrowerHealthV1::Liquidatable);
+    assert_eq!(health_ltv, Decimal256::one());
 }
 
 #[test]

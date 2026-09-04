@@ -63,6 +63,9 @@ const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 const COLLATERAL_DENOM: &str = "nbtc.figure.se";
 /// Second supported collateral used to test liquidation when one feed is stale or missing.
 const UNRELIABLE_COLLATERAL: &str = "neth.figure.se";
+/// 18-decimal collateral for the sc-544110 value_usd band regression.
+const WEI_COLLATERAL: &str = "wei.eth.figure.se";
+const ONE_WHOLE_18: u128 = 1_000_000_000_000_000_000;
 
 fn default_instantiate_msg() -> InstantiateMsg {
     InstantiateMsg {
@@ -120,8 +123,37 @@ fn instantiate_msg_full_haircut_collateral() -> InstantiateMsg {
     msg
 }
 
+fn instantiate_msg_with_wei_collateral() -> InstantiateMsg {
+    let mut msg = default_instantiate_msg();
+    msg.contract_name = "pool-v2-wei-collateral".to_string();
+    msg.supported_collateral_assets.push(CollateralAssetV1 {
+        asset_id: WEI_COLLATERAL.to_string(),
+        haircut: Some(Decimal256::percent(80)),
+    });
+    msg
+}
+
 fn price_entry(price: &str) -> AssetPriceResponseV1 {
     AssetPriceResponseV1::new(Decimal256::from_str(price).unwrap(), 0, u64::MAX)
+}
+
+/// Display USD at a mapping precision. `price_usd` is left at zero so a caller that still
+/// multiplied the deprecated scaled field would treat the bag as worthless.
+fn display_price(display: &str, precision: u32) -> AssetPriceResponseV1 {
+    #[allow(deprecated)]
+    AssetPriceResponseV1 {
+        price_usd: Decimal256::zero(),
+        display_price_usd: Decimal256::from_str(display).unwrap(),
+        precision,
+        as_of_epoch_second: 0,
+        expiration_epoch_seconds: u64::MAX,
+    }
+}
+
+fn seize_all(denom: &str, amount: u128) -> BTreeMap<String, Uint128> {
+    let mut m = BTreeMap::new();
+    m.insert(denom.to_string(), Uint128::new(amount));
+    m
 }
 
 fn set_oracle_prices(
@@ -218,6 +250,63 @@ fn setup_liquidatable_borrower() -> (
     set_oracle_prices(&mut deps.querier, prices);
 
     (deps, env, debt_amount, collateral_amount)
+}
+
+/// Priced dust: 1000 units crash to $0.0005 ($0.50 market, below one lending atom at $1).
+/// Debt 700 remains. min_repay clamps to 1; full close with repay 1 books residual 699.
+fn setup_priced_dust_borrower(
+    allocation: BadDebtLossAllocation,
+) -> (
+    OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    Env,
+) {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+    let mut msg = instantiate_msg_full_haircut_collateral();
+    msg.bad_debt_loss_allocation = allocation;
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.0005"));
+    set_oracle_prices(&mut deps.querier, prices);
+    (deps, env)
 }
 
 #[test]
@@ -1230,4 +1319,337 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
     );
     assert_reserve_assets_liabilities_tie_out(deps.as_ref().storage, "after immediate haircut")
         .unwrap();
+}
+
+// --- Full close: waive 100% floor when seizure empties the collateral map ---
+
+/// Invariant: a full seizure with residual debt zeros `scaled_borrow` in the same
+/// transaction (empty map + leftover debt is not a reachable post-state).
+#[test]
+fn liquidate_full_close_priced_dust_books_deficit() {
+    let (mut deps, env) = setup_priced_dust_borrower(BadDebtLossAllocation::DeferredToDeficit);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("full close of priced dust");
+
+    let bad_debt = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+        .expect("bad_debt_underlying attribute");
+    assert_eq!(bad_debt.value, "699");
+    let deficit_attr = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_DEFICIT_UNDERLYING)
+        .expect("deficit_underlying attribute");
+    assert_eq!(deficit_attr.value, "699");
+
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, 699);
+    assert_reserve_assets_liabilities_tie_out(deps.as_ref().storage, "after dust full close")
+        .unwrap();
+}
+
+#[test]
+fn liquidate_full_close_priced_dust_immediate_haircut() {
+    let (mut deps, env) =
+        setup_priced_dust_borrower(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let eff =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .expect("effective reserve before liquidate");
+    let l = eff.total_liquidity().unwrap();
+    let bad_debt_amt = 699u128;
+    let d = Decimal256::from_ratio(Uint128::from(bad_debt_amt), Uint128::one());
+    let scaled = Decimal256::from_ratio(Uint128::from(eff.total_scaled_liquidity), Uint128::one());
+    let exp_liquidity_index = l.checked_sub(d).unwrap().checked_div(scaled).unwrap();
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("full close of priced dust with immediate haircut");
+
+    let bad_debt = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+        .expect("bad_debt_underlying attribute");
+    assert_eq!(bad_debt.value, "699");
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_DEFICIT_UNDERLYING)
+            .map(|a| a.value.as_str()),
+        Some("0")
+    );
+
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, 0);
+    assert_eq!(reserve.liquidity_index, exp_liquidity_index);
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after dust full close immediate haircut",
+    )
+    .unwrap();
+}
+
+/// Safety property: full close does not waive the bonus cap. A valuable bag cannot be
+/// emptied by a repay whose bonus multiple is below the bag's market value.
+#[test]
+fn liquidate_full_close_valuable_bag_rejected_by_bonus_cap() {
+    let (mut deps, env, _, collateral_amount) = setup_liquidatable_borrower();
+    let repay_amount = 374u128; // meets min repay so the band, not the floor, is what rejects
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(OWNER),
+            &[coin(repay_amount, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, collateral_amount),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("exceeds allowed maximum")
+                    || message.contains("borrower protection"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn liquidate_partial_seizure_still_requires_100_percent_floor() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    let repay_amount = 374u128;
+    // Strict subset: 1 unit at $0.83 is below 100% of repay 374; not a full close, so the floor binds.
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(OWNER),
+            &[coin(repay_amount, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("below required") || message.contains("100%"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+/// Owner attaches the entire debt and seizes everything: no deficit, no index haircut.
+#[test]
+fn liquidate_full_close_with_full_debt_repayment_books_no_deficit() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        instantiate_msg_full_haircut_collateral(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.70"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let index_before = get_reserve_state_v1(deps.as_ref().storage)
+        .unwrap()
+        .liquidity_index;
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(700, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("full close with full debt repayment");
+
+    assert!(res
+        .attributes
+        .iter()
+        .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING));
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, 0);
+    assert_eq!(reserve.liquidity_index, index_before);
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after full-close full repayment",
+    )
+    .unwrap();
+}
+
+/// 3 whole 18-decimal tokens at $0.40 display = $1.20 market, above the 1-atom bonus cap ($1.02).
+/// Deprecated scaled `price_usd` is zero in the fixture; the band must use `value_usd`.
+#[test]
+fn liquidate_full_close_18_decimal_cheap_display_rejected_by_bonus_cap() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        instantiate_msg_with_wei_collateral(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let wei_amount = 3 * ONE_WHOLE_18;
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(WEI_COLLATERAL.to_string(), display_price("1.0", 18));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(wei_amount, WEI_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(1),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(WEI_COLLATERAL.to_string(), display_price("0.40", 18));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("exceeds allowed maximum")
+                    || message.contains("borrower protection"),
+                "band must use value_usd (not truncated price_usd): {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
 }

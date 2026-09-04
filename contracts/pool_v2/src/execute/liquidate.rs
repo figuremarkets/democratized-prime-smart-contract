@@ -5,6 +5,9 @@
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
+//! A **full close** (post-seizure collateral map empty) waives only the 100% floor; the bonus
+//! cap still applies, so a 1-atom repay can empty only a dust bag. Residual debt is booked in
+//! the same transaction via `bad_debt_loss_allocation`.
 //! Collateral with **no stored** oracle price, a **zero** stored price, or last-known older than
 //! `max_liquidation_staleness_seconds`, is valued at zero for LTV/min-repay and cannot
 //! be seized. A **stale** stored price still within that bound is used as last-known (not fatal)
@@ -12,9 +15,9 @@
 //! within the same bound.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → liquidatable →
-//! minimum repay (USD → lending units) → sent funds and scaled repay → collateral value band and
-//! per-asset checks → dry-run post-seizure / bad-debt → persist reserve and collateral → response
-//! (collateral send + attrs) → refund excess lending.
+//! minimum repay (USD → lending units) → sent funds and scaled repay → per-asset checks and
+//! dry-run post-seizure → value band (100% floor waived on full close) → persist reserve and
+//! collateral → response (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
 //! vs **immediate** (pro-rata `liquidity_index` haircut in the same tx; see `apply_pro_rata_liquidity_index_haircut`).
@@ -48,7 +51,8 @@ pub const ACTION: &str = "liquidate";
 pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may liquidate";
 
 /// Liquidate a borrower whose LTV ≥ liquidation_rate. Contract owner only. Repay debt from funds and seize
-/// collateral per `collateral_to_seize`; value must be 100%–liquidation_bonus_rate of repay. See module doc for flow.
+/// collateral per `collateral_to_seize`; market value must be 100%–liquidation_bonus_rate of repay, except a
+/// full close waives the 100% floor (bonus cap still applies). See module doc for flow.
 pub fn liquidate(
     deps: DepsMut,
     env: Env,
@@ -207,7 +211,7 @@ pub fn liquidate(
         .checked_sub(scaled_repay)
         .ok_or_else(|| illegal_state("scaled debt underflow"))?;
 
-    // ---------- 6. Collateral to seize: non-empty map; per-asset support, balances; USD band vs repay ----------
+    // ---------- 6. Per-asset support/balances; seizure list; dry-run post-seizure ----------
     let actual_repay_value_usd = price_lending.value_usd(actual_repay_underlying)?;
     let min_collateral_value_required = actual_repay_value_usd; // 100% of repay value
     let max_collateral_value_allowed = actual_repay_value_usd.checked_mul(bonus)?;
@@ -261,22 +265,6 @@ pub fn liquidate(
         seized_value_usd = seized_value_usd.checked_add(value)?;
     }
 
-    ensure!(
-        seized_value_usd >= min_collateral_value_required,
-        illegal_argument(format!(
-            "Collateral to seize value {} is below required 100% of repay value {}",
-            seized_value_usd, min_collateral_value_required
-        ))
-    );
-    ensure!(
-        seized_value_usd <= max_collateral_value_allowed,
-        illegal_argument(format!(
-            "Collateral to seize value {} exceeds allowed maximum (liquidation_bonus_rate) of repay value {} (borrower protection)",
-            seized_value_usd, max_collateral_value_allowed
-        ))
-    );
-
-    // ---------- 7. Seizure list; dry-run post-seizure collateral; bad-debt flag ----------
     let to_seize: Vec<(String, u128)> = collateral_to_seize
         .iter()
         .filter(|(_, amt)| !amt.is_zero())
@@ -289,7 +277,8 @@ pub fn liquidate(
         )
     );
 
-    // Dry-run remaining borrower collateral after this seizure (detect bad debt before persisting).
+    // Dry-run remaining borrower collateral after this seizure (detect full close / bad debt
+    // before the value band, so the 100% floor can be waived only when the map would be empty).
     let mut new_amounts = borrower_collateral.amounts.clone();
     for (asset_id, seize_amt) in &to_seize {
         let cur = *new_amounts.get(asset_id).unwrap_or(&0);
@@ -302,7 +291,26 @@ pub fn liquidate(
             new_amounts.remove(asset_id);
         }
     }
-    let bad_debt = new_amounts.is_empty() && new_scaled_debt > 0;
+    let is_full_close = new_amounts.is_empty();
+
+    // ---------- 7. USD band vs repay (100% floor waived on full close); bad-debt flag ----------
+    ensure!(
+        is_full_close || seized_value_usd >= min_collateral_value_required,
+        illegal_argument(format!(
+            "Collateral to seize value {} is below required 100% of repay value {} \
+             (waived only when the seizure empties the borrower collateral map)",
+            seized_value_usd, min_collateral_value_required
+        ))
+    );
+    ensure!(
+        seized_value_usd <= max_collateral_value_allowed,
+        illegal_argument(format!(
+            "Collateral to seize value {} exceeds allowed maximum (liquidation_bonus_rate) of repay value {} (borrower protection)",
+            seized_value_usd, max_collateral_value_allowed
+        ))
+    );
+
+    let bad_debt = is_full_close && new_scaled_debt > 0;
     let bad_debt_underlying_amt = if bad_debt {
         scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?
     } else {
