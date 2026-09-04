@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "democratized-prime-lib"
-version = "1.1.0-rc4"
+version = "1.1.0-rc5"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "democratized-prime-pool-v2"
-version = "1.1.0-rc4"
+version = "1.1.0-rc5"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "democratized-prime-price-oracle"
-version = "1.1.0-rc4"
+version = "1.1.0-rc5"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "repo-token-cw20"
-version = "1.1.0-rc4"
+version = "1.1.0-rc5"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
