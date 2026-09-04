@@ -207,6 +207,39 @@ fn required_attr_pattern_rejects_empty_wildcard_suffix() {
 }
 
 #[test]
+fn required_attr_pattern_rejects_whitespace_only() {
+    let err = validate_required_attr_pattern("   ").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("cannot be empty"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_internal_whitespace() {
+    let err = validate_required_attr_pattern("lender .kyc").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("whitespace"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_empty_suffix_segments() {
+    let err = validate_required_attr_pattern("*..pb").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("empty name segments"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
 fn lender_attrs_ok_when_empty_list() {
     let deps = mock_provenance_dependencies();
     validate_lender_attrs(&deps.as_ref().querier, "tp1user", &[]).unwrap();
@@ -317,6 +350,43 @@ fn lender_attrs_fail_when_wildcard_suffix_only() {
         }
         _ => panic!("expected NotAuthorizedError, got {:?}", err),
     }
+}
+
+#[test]
+fn wildcard_rejects_suffix_injection_from_scan() {
+    let mut deps = mock_provenance_dependencies();
+    // Scan on suffix `fiat.pb` returns a raw-suffix false positive.
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("hackfiat.pb", "verified")],
+    );
+    let err = validate_lender_attrs(
+        &deps.as_ref().querier,
+        "tp1user",
+        &["*.fiat.pb".to_string()],
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::NotAuthorizedError { .. } => {}
+        _ => panic!("expected NotAuthorizedError, got {:?}", err),
+    }
+}
+
+#[test]
+fn wildcard_accepts_segment_match_among_scan_false_positives() {
+    let mut deps = mock_provenance_dependencies();
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("hackfiat.pb", "no"), ("figuremarkets.fiat.pb", "verified")],
+    );
+    validate_lender_attrs(
+        &deps.as_ref().querier,
+        "tp1user",
+        &["*.fiat.pb".to_string()],
+    )
+    .unwrap();
 }
 
 #[test]
