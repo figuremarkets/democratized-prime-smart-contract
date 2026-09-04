@@ -39,6 +39,7 @@ fn contract_state_with_custodian(custodian: Option<&str>) -> ContractStateV1 {
         bad_debt_loss_allocation: Default::default(),
         custodian: custodian.map(Addr::unchecked),
         max_liquidation_staleness_seconds: 3600,
+        liquidation_access: Default::default(),
     }
 }
 

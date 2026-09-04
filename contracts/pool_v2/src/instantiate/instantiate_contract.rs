@@ -4,7 +4,8 @@ use crate::constants::{
 };
 use crate::model::error::{illegal_argument, ContractError};
 use crate::model::{
-    ContractStateV1, OperationalState, ReserveStateV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+    ensure_permissionless_config, ContractStateV1, OperationalState, ReserveStateV1,
+    MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{set_contract_state_v1, set_reserve_state_v1};
@@ -149,6 +150,12 @@ pub fn instantiate_contract(
         msg.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
         illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
+    ensure_permissionless_config(
+        msg.liquidation_access,
+        msg.max_liquidation_staleness_seconds,
+        msg.bad_debt_loss_allocation,
+        0,
+    )?;
     ensure!(
         msg.lender_required_attrs.len() <= MAX_LENDER_BORROWER_REQUIRED_ATTRS,
         illegal_argument(format!(
@@ -189,6 +196,7 @@ pub fn instantiate_contract(
         bad_debt_loss_allocation: msg.bad_debt_loss_allocation,
         custodian: Some(custodian.to_owned()),
         max_liquidation_staleness_seconds: msg.max_liquidation_staleness_seconds,
+        liquidation_access: msg.liquidation_access,
     };
     set_contract_state_v1(deps.storage, &contract_state)?;
     initialize_owner(deps.storage, deps.api, Some(info.sender.as_str()))?;

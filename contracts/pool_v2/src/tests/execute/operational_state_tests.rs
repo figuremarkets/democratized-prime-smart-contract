@@ -407,6 +407,7 @@ fn paused_allows_custodian_config_messages() {
             min_borrow: None,
             max_borrower_collateral_types: None,
             max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,

@@ -6,10 +6,14 @@
 //! LTV bar and could make many positions liquidatable at once.
 //!
 //! **`bad_debt_loss_allocation`:** May only be changed when **`deficit_underlying`** is zero.
+//! Permissionless liquidation additionally requires **immediate** allocation and a zero deficit.
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
-use crate::model::{BadDebtLossAllocation, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS};
+use crate::model::{
+    ensure_permissionless_config, BadDebtLossAllocation, LiquidationAccess,
+    MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
 use crate::utils::assert_custodian;
 use cosmwasm_std::{ensure, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128};
@@ -33,6 +37,7 @@ pub struct UpdateContractConfigParams {
     pub bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
     pub custodian: Option<String>,
     pub max_liquidation_staleness_seconds: Option<u64>,
+    pub liquidation_access: Option<LiquidationAccess>,
 }
 
 /// Update contract config. Contract custodian only; no funds. Only provided fields are updated.
@@ -60,7 +65,8 @@ pub fn update_contract_config(
         || params.commit_market_id.is_some()
         || params.bad_debt_loss_allocation.is_some()
         || params.custodian.is_some()
-        || params.max_liquidation_staleness_seconds.is_some();
+        || params.max_liquidation_staleness_seconds.is_some()
+        || params.liquidation_access.is_some();
     ensure!(
         has_any,
         illegal_argument("At least one config field must be provided")
@@ -133,6 +139,9 @@ pub fn update_contract_config(
     if let Some(v) = params.max_liquidation_staleness_seconds {
         contract.max_liquidation_staleness_seconds = v;
     }
+    if let Some(v) = params.liquidation_access {
+        contract.liquidation_access = v;
+    }
 
     ensure!(
         !contract.margin_rate.is_zero(),
@@ -168,6 +177,13 @@ pub fn update_contract_config(
         contract.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
         illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
+    let deficit_underlying = get_reserve_state_v1(deps.storage)?.deficit_underlying;
+    ensure_permissionless_config(
+        contract.liquidation_access,
+        contract.max_liquidation_staleness_seconds,
+        contract.bad_debt_loss_allocation,
+        deficit_underlying,
+    )?;
 
     set_contract_state_v1(deps.storage, &contract)?;
     Response::new()

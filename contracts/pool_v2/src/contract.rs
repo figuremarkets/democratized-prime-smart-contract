@@ -119,6 +119,7 @@ pub fn execute(
             bad_debt_loss_allocation,
             custodian,
             max_liquidation_staleness_seconds,
+            liquidation_access,
         } => update_contract_config(
             deps,
             env,
@@ -135,6 +136,7 @@ pub fn execute(
                 bad_debt_loss_allocation,
                 custodian,
                 max_liquidation_staleness_seconds,
+                liquidation_access,
             },
         ),
         ExecuteMsg::UpdateRateParams { rate_params } => {

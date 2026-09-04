@@ -8,7 +8,8 @@ use crate::constants::{
 use crate::instantiate::{instantiate_contract, reply};
 use crate::model::error::ContractError;
 use crate::model::{
-    CollateralAssetV1, Denom, RateParamsV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+    BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
+    MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS, MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
@@ -61,6 +62,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidation_access: Default::default(),
     }
 }
 
@@ -643,6 +645,90 @@ fn instantiate_fails_max_liquidation_staleness_exceeds_maximum() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(message.contains("max_liquidation_staleness_seconds exceeds maximum"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn instantiate_fails_permissionless_when_staleness_above_permissionless_bound() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidation_access = LiquidationAccess::Permissionless;
+    msg.bad_debt_loss_allocation = BadDebtLossAllocation::ImmediateLiquidityIndexHaircut;
+    msg.max_liquidation_staleness_seconds = MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS;
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains(
+                "max_liquidation_staleness_seconds too high for permissionless liquidation"
+            ));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn instantiate_succeeds_permissionless_at_permissionless_staleness_bound() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidation_access = LiquidationAccess::Permissionless;
+    msg.bad_debt_loss_allocation = BadDebtLossAllocation::ImmediateLiquidityIndexHaircut;
+    msg.max_liquidation_staleness_seconds = MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS;
+
+    instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("permissionless instantiate at the 1h bound");
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        contract.liquidation_access,
+        LiquidationAccess::Permissionless
+    );
+    assert_eq!(
+        contract.max_liquidation_staleness_seconds,
+        MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS
+    );
+    assert_eq!(
+        contract.bad_debt_loss_allocation,
+        BadDebtLossAllocation::ImmediateLiquidityIndexHaircut
+    );
+}
+
+#[test]
+fn instantiate_fails_permissionless_while_deferred() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidation_access = LiquidationAccess::Permissionless;
+    msg.bad_debt_loss_allocation = BadDebtLossAllocation::DeferredToDeficit;
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message
+                .contains("permissionless liquidation requires immediate_liquidity_index_haircut"));
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }

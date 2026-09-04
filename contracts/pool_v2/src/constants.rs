@@ -20,6 +20,8 @@ pub const ATTRIBUTE_CUSTODIAN: &str = "custodian";
 pub const ATTRIBUTE_LENDER: &str = "lender";
 pub const ATTRIBUTE_LENDER_REQUIRED_ATTRS_JSON: &str = "lender_required_attrs_json";
 pub const ATTRIBUTE_LIQUIDATOR: &str = "liquidator";
+/// Pool config `liquidation_access` on every Liquidate (auditability of who was allowed).
+pub const ATTRIBUTE_LIQUIDATION_ACCESS: &str = "liquidation_access";
 pub const ATTRIBUTE_BORROW_RATE: &str = "borrow_rate";
 pub const ATTRIBUTE_BORROW_INDEX: &str = "borrow_index";
 pub const ATTRIBUTE_LEND_RATE: &str = "lend_rate";

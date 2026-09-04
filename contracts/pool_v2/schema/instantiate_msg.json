@@ -67,6 +67,15 @@
     "lending_denom": {
       "$ref": "#/definitions/Denom"
     },
+    "liquidation_access": {
+      "description": "Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`]. Unpriceable collateral that is load-bearing still requires the owner.",
+      "default": "owner_only",
+      "allOf": [
+        {
+          "$ref": "#/definitions/LiquidationAccess"
+        }
+      ]
+    },
     "liquidation_bonus_rate": {
       "description": "Liquidation bonus rate: max collateral value = repay value × this (e.g. 1.02 = 2% bonus). - Must be > 1.",
       "allOf": [
@@ -87,7 +96,7 @@
       "minimum": 0.0
     },
     "max_liquidation_staleness_seconds": {
-      "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted JSON uses 1 hour (capped at 24 hours). `0` disables last-known prices.",
+      "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted JSON uses 1 hour (capped at 24 hours under owner-only; permissionless cannot exceed 1 hour). `0` disables last-known prices.",
       "default": 3600,
       "type": "integer",
       "format": "uint64",
@@ -129,7 +138,7 @@
   "additionalProperties": false,
   "definitions": {
     "BadDebtLossAllocation": {
-      "description": "How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers.",
+      "description": "How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers. [`Self::DeferredToDeficit`] is backstop/cover-from-outside (owner-controlled trigger). [`Self::ImmediateLiquidityIndexHaircut`] socializes in the liquidating tx (required for [`LiquidationAccess::Permissionless`]).",
       "oneOf": [
         {
           "description": "Book `deficit_underlying`; reduce via **EliminateDeficit** or **SocializeDeficit** (pro-rata `liquidity_index` haircut + lower deficit).",
@@ -207,6 +216,25 @@
           "type": "string",
           "enum": [
             "flat_borrow_spread"
+          ]
+        }
+      ]
+    },
+    "LiquidationAccess": {
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",
+      "oneOf": [
+        {
+          "description": "Only the cw-ownable owner may liquidate (current production posture).",
+          "type": "string",
+          "enum": [
+            "owner_only"
+          ]
+        },
+        {
+          "description": "Any address may liquidate a fully-quoted liquidatable borrower. Unpriceable collateral that is load-bearing still requires the owner.",
+          "type": "string",
+          "enum": [
+            "permissionless"
           ]
         }
       ]

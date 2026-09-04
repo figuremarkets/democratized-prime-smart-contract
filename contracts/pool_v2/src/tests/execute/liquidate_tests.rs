@@ -1,16 +1,18 @@
-//! Tests for Liquidate execute: contract owner only, borrower must be liquidatable, minimum repay to reach
-//! healthy LTV, 2% collateral bonus; failures for non-owner, no debt, not liquidatable, insufficient repay.
+//! Tests for Liquidate execute: auth follows liquidation_access (default owner-only;
+//! permissionless still requires the owner when unpriceable collateral is load-bearing),
+//! borrower must be liquidatable, minimum repay to reach healthy LTV, 2% collateral bonus.
 
 use crate::constants::{
-    ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_SCALED_AMOUNT,
+    ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS,
+    ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::contract::execute;
-use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR};
+use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::health::BorrowerHealthV1;
 use crate::model::{
-    BadDebtLossAllocation, CollateralAssetV1, Denom, RateParamsV1,
+    BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
     DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
@@ -108,6 +110,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidation_access: Default::default(),
     }
 }
 
@@ -356,6 +359,247 @@ fn liquidate_for_custodian_fails() {
     ));
 }
 
+fn set_liquidation_access(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: Env,
+    access: LiquidationAccess,
+) {
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
+            liquidation_access: Some(access),
+            commit_market_id: None,
+            bad_debt_loss_allocation: match access {
+                LiquidationAccess::Permissionless => {
+                    Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut)
+                }
+                LiquidationAccess::OwnerOnly => None,
+            },
+            custodian: None,
+        },
+    )
+    .expect("custodian can set liquidation_access");
+}
+
+#[test]
+fn liquidate_permissionless_allows_non_owner() {
+    let (mut deps, env, debt_amount, collateral_amount) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+
+    // Send more than debt so we also get a refund BankMsg, both must target OTHER not OWNER.
+    let sent = 1000u128;
+    assert!(sent > debt_amount, "test sends more than debt");
+    let seize_units = 730u128;
+    let mut to_seize = BTreeMap::new();
+    to_seize.insert(COLLATERAL_DENOM.to_string(), Uint128::new(seize_units));
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(sent, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: to_seize,
+        },
+    )
+    .expect("any sender may liquidate when access is permissionless");
+
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_LIQUIDATION_ACCESS)
+            .map(|a| a.value.as_str()),
+        Some(LiquidationAccess::Permissionless.as_str())
+    );
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OTHER);
+            assert_ne!(to_address.as_str(), OWNER);
+            assert_eq!(amount.len(), 1);
+            assert_eq!(amount[0].denom, COLLATERAL_DENOM);
+            assert_eq!(amount[0].amount.u128(), seize_units);
+            assert!(seize_units <= collateral_amount);
+        }
+        _ => panic!("expected first message BankMsg::Send (collateral)"),
+    }
+    let actual_repay: u128 = res.attributes[3].value.parse().unwrap();
+    match &res.messages[1].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OTHER);
+            assert_ne!(to_address.as_str(), OWNER);
+            assert_eq!(amount.len(), 1);
+            assert_eq!(amount[0].denom, LENDING_DENOM);
+            assert_eq!(amount[0].amount.u128(), sent - actual_repay);
+        }
+        _ => panic!("expected second message BankMsg::Send (excess refund)"),
+    }
+}
+
+#[test]
+fn liquidate_permissionless_still_allows_owner() {
+    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("owner may still liquidate when access is permissionless");
+}
+
+#[test]
+fn liquidate_permissionless_rejects_non_owner_when_unpriceable_has_no_stored_quote() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    add_unreliable_dust_then_break_feed(&mut deps, &env, false, true);
+
+    let min_repay = 374u128;
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_UNPRICEABLE_ERR
+    ));
+}
+
+#[test]
+fn liquidate_permissionless_rejects_non_owner_when_unpriceable_quote_is_zero() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    add_unreliable_dust_then_break_feed(&mut deps, &env, false, false);
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let min_repay = 374u128;
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_UNPRICEABLE_ERR
+    ));
+}
+
+#[test]
+fn liquidate_permissionless_allows_non_owner_when_unpriceable_dust_is_not_load_bearing() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    add_unreliable_collateral_then_expire_beyond_bound(&mut deps, &env, 1);
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("dust of a too-old feed does not disable permissionless");
+}
+
+#[test]
+fn liquidate_permissionless_rejects_non_owner_when_unpriceable_collateral_is_load_bearing() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    // 1000 ETH at last-known $1, haircut 80% → $800. Combined with BTC $664, LTV 600/1464 < 0.9.
+    add_unreliable_collateral_then_expire_beyond_bound(&mut deps, &env, 1000);
+
+    let min_repay = 374u128;
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_UNPRICEABLE_ERR
+    ));
+}
+
+#[test]
+fn liquidate_permissionless_owner_still_liquidates_when_collateral_unpriceable() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    add_unreliable_dust_then_break_feed(&mut deps, &env, false, true);
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("owner may still liquidate a mixed unpriceable bag under permissionless");
+}
+
+#[test]
+fn liquidate_permissionless_allows_non_owner_when_stale_within_last_known() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    add_unreliable_dust_then_break_feed(&mut deps, &env, true, false);
+
+    let min_repay = 374u128;
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("last-known within the bound is still permissionless");
+}
+
 #[test]
 fn liquidate_succeeds_when_lending_denom_price_is_stale() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();
@@ -416,6 +660,42 @@ fn add_unreliable_dust_then_break_feed(
             prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
         }
     }
+    set_oracle_prices(&mut deps.querier, prices);
+}
+
+fn add_unreliable_collateral_then_expire_beyond_bound(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &Env,
+    amount: u128,
+) {
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(amount, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add second collateral while its feed is live");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.83"));
+    prices.insert(
+        UNRELIABLE_COLLATERAL.to_string(),
+        oracle_price_expired_for(
+            Decimal256::from_str("1.0").unwrap(),
+            env.block.time,
+            DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+        ),
+    );
     set_oracle_prices(&mut deps.querier, prices);
 }
 

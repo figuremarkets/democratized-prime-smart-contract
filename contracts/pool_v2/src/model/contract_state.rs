@@ -1,9 +1,9 @@
-use cosmwasm_std::{Addr, Decimal256, Uint128};
+use cosmwasm_std::{ensure, Addr, Decimal256, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::model::collateral::CollateralAssetV1;
-use crate::model::error::{illegal_state, ContractError};
+use crate::model::error::{illegal_argument, illegal_state, ContractError};
 use crate::model::{Denom, RateParamsV1};
 
 /// Default outer bound on last-known oracle prices used for liquidation (1 hour).
@@ -13,22 +13,66 @@ use crate::model::{Denom, RateParamsV1};
 ///
 /// Borrow / RemoveCollateral still require a **fresh** lending-denom price and give no
 /// credit for stale collateral (oracle staleness threshold, typically tens of seconds).
-/// Liquidation may use last-known prices up to this bound. Do not enable permissionless
-/// liquidation against [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
+/// Liquidation may use last-known prices up to this bound. Owner-only may raise it up to
+/// [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`]; permissionless is capped at
+/// [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`].
 pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 60 * 60;
 
 /// Hard cap so a custodian cannot restore last-known prices into "this quote is
-/// meaningless" territory.
+/// meaningless" territory. Applies only under [`LiquidationAccess::OwnerOnly`].
 pub const MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS: u64 = 24 * 60 * 60;
+
+/// Last-known window allowed with [`LiquidationAccess::Permissionless`]. Same as the
+/// default: at 50% annual vol, ~1h drift stays inside a 2% bonus; 24h does not.
+pub const MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS: u64 =
+    DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS;
 
 const _: () =
     assert!(DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS);
+const _: () = assert!(
+    MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS
+);
+
+/// Reject permissionless liquidation unless last-known, bad-debt allocation, and deficit
+/// are compatible. Call after applying config so either field-order is caught.
+pub fn ensure_permissionless_config(
+    access: LiquidationAccess,
+    max_liquidation_staleness_seconds: u64,
+    allocation: BadDebtLossAllocation,
+    deficit_underlying: u128,
+) -> Result<(), ContractError> {
+    if access == LiquidationAccess::Permissionless {
+        ensure!(
+            max_liquidation_staleness_seconds <= MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
+            illegal_argument(
+                "max_liquidation_staleness_seconds too high for permissionless liquidation"
+            )
+        );
+        ensure!(
+            allocation == BadDebtLossAllocation::ImmediateLiquidityIndexHaircut,
+            illegal_argument(
+                "permissionless liquidation requires immediate_liquidity_index_haircut"
+            )
+        );
+        ensure!(
+            deficit_underlying == 0,
+            illegal_argument(
+                "cannot enable permissionless liquidation while deficit_underlying > 0; \
+                 clear the deficit with EliminateDeficit or SocializeDeficit first"
+            )
+        );
+    }
+    Ok(())
+}
 
 pub fn default_max_liquidation_staleness_seconds() -> u64 {
     DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS
 }
 
 /// How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers.
+/// [`Self::DeferredToDeficit`] is backstop/cover-from-outside (owner-controlled trigger).
+/// [`Self::ImmediateLiquidityIndexHaircut`] socializes in the liquidating tx (required for
+/// [`LiquidationAccess::Permissionless`]).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BadDebtLossAllocation {
@@ -39,6 +83,33 @@ pub enum BadDebtLossAllocation {
     /// In the same liquidation tx, apply a pro-rata `liquidity_index` haircut for the bad-debt amount
     /// (no `deficit_underlying` increment for that slice).
     ImmediateLiquidityIndexHaircut,
+}
+
+/// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only.
+/// [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`],
+/// [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0`
+/// (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing
+/// (counting last-known of dropped feeds would make the position not liquidatable, or a
+/// dropped feed has no stored quote) still requires the owner. Paused still
+/// blocks Liquidate for everyone.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LiquidationAccess {
+    /// Only the cw-ownable owner may liquidate (current production posture).
+    #[default]
+    OwnerOnly,
+    /// Any address may liquidate a fully-quoted liquidatable borrower.
+    /// Unpriceable collateral that is load-bearing still requires the owner.
+    Permissionless,
+}
+
+impl LiquidationAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LiquidationAccess::OwnerOnly => "owner_only",
+            LiquidationAccess::Permissionless => "permissionless",
+        }
+    }
 }
 
 impl BadDebtLossAllocation {
@@ -140,6 +211,11 @@ pub struct ContractStateV1 {
     /// last-known prices.
     #[serde(rename = "mlss", default = "default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
+
+    /// Who may call Liquidate. Default [`LiquidationAccess::OwnerOnly`] so older state
+    /// blobs and omitted instantiate JSON stay owner-gated.
+    #[serde(rename = "la", default)]
+    pub liquidation_access: LiquidationAccess,
 }
 
 impl ContractStateV1 {

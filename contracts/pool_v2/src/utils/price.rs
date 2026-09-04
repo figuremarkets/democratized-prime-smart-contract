@@ -10,8 +10,23 @@ use std::collections::HashSet;
 /// Last-known prices for liquidation, plus denoms that must not be seized.
 #[derive(Debug)]
 pub struct LiquidationPrices {
+    /// Quotes used for the health verdict and seizure band. Unpriceable holdings omitted.
     pub prices: PriceMapResponse,
+    /// Held denoms (amount > 0) with no stored, zero, or over-stale oracle price.
     pub unpriceable: HashSet<String>,
+    /// Stored quotes for [`Self::unpriceable`] denoms, retained for the permissionless
+    /// auth gate only. Missing and zero feeds have no entry (a zero quote is as
+    /// uninformative as a missing one). Never used for health or seizure.
+    pub unpriceable_last_known: PriceMapResponse,
+}
+
+impl LiquidationPrices {
+    /// Acted-on prices plus retained too-old quotes. Auth materiality only.
+    pub fn prices_with_unpriceable_last_known(&self) -> PriceMapResponse {
+        let mut prices = self.prices.clone();
+        prices.extend(self.unpriceable_last_known.clone());
+        prices
+    }
 }
 
 /// Fetches asset prices from the price oracle contract.
@@ -115,8 +130,11 @@ fn liquidation_price_too_old(price: &AssetPriceResponseV1, now: Timestamp, max_s
 /// Prices for liquidation. A stored price is used even if stale, as long as it is still within
 /// [`ContractStateV1::max_liquidation_staleness_seconds`] of expiration (last-known).
 /// The lending denom must have a stored price within that bound. Collateral with no stored price,
-/// a zero stored price, or last-known older than the bound, is omitted and listed in
-/// [`LiquidationPrices::unpriceable`].
+/// a zero stored price, or last-known older than the bound, is omitted from [`LiquidationPrices::prices`]
+/// and listed in [`LiquidationPrices::unpriceable`]. A stored too-old **non-zero** quote is kept in
+/// [`LiquidationPrices::unpriceable_last_known`] so permissionless auth can test whether that
+/// holding is load-bearing. Missing and zero quotes are not retained. Zero-amount map entries
+/// are ignored.
 pub fn get_asset_prices_for_liquidation(
     querier: &QuerierWrapper,
     block_time: &Timestamp,
@@ -152,20 +170,27 @@ pub fn get_asset_prices_for_liquidation(
     }
 
     let mut unpriceable = HashSet::new();
-    for asset_id in borrower_collateral.amounts.keys() {
+    let mut unpriceable_last_known = PriceMapResponse::new();
+    for (asset_id, amount) in borrower_collateral.amounts.iter() {
+        if *amount == 0 {
+            continue;
+        }
         match price_data.get(asset_id) {
             None => {
                 unpriceable.insert(asset_id.clone());
             }
+            Some(p) if p.is_zero_price() => {
+                unpriceable.insert(asset_id.clone());
+            }
             Some(p)
-                if p.is_zero_price()
-                    || liquidation_price_too_old(
-                        p,
-                        *block_time,
-                        contract_state.max_liquidation_staleness_seconds,
-                    ) =>
+                if liquidation_price_too_old(
+                    p,
+                    *block_time,
+                    contract_state.max_liquidation_staleness_seconds,
+                ) =>
             {
                 unpriceable.insert(asset_id.clone());
+                unpriceable_last_known.insert(asset_id.clone(), p.clone());
             }
             Some(_) => {}
         }
@@ -177,5 +202,6 @@ pub fn get_asset_prices_for_liquidation(
     Ok(LiquidationPrices {
         prices: price_data,
         unpriceable,
+        unpriceable_last_known,
     })
 }

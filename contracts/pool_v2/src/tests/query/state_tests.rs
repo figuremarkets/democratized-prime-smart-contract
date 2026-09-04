@@ -30,6 +30,10 @@ fn get_state_returns_contract_and_effective_reserve() {
     assert_eq!(state.total_collateral_held[0].amount, Uint128::zero());
     assert!(state.total_collateral_held[0].satisfiable);
     assert_eq!(state.contract.max_liquidation_staleness_seconds, 3600);
+    assert_eq!(
+        state.contract.liquidation_access,
+        crate::model::LiquidationAccess::OwnerOnly
+    );
     let reserve = ReserveStateV1::from(state.reserve);
     assert_eq!(reserve.total_scaled_liquidity, 0);
     assert_eq!(reserve.total_scaled_borrow, 0);

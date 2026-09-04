@@ -1,4 +1,6 @@
-use crate::model::{BadDebtLossAllocation, CollateralAssetV1, Denom, RateParamsV1};
+use crate::model::{
+    BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
+};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Decimal256, Uint128};
 
@@ -63,7 +65,14 @@ pub struct InstantiateMsg {
     /// The account serving as the custodian of contract operations.
     pub custodian: String,
     /// Seconds past oracle expiration after which a stored price is unpriceable for
-    /// liquidation. Omitted JSON uses 1 hour (capped at 24 hours). `0` disables last-known prices.
+    /// liquidation. Omitted JSON uses 1 hour (capped at 24 hours under owner-only;
+    /// permissionless cannot exceed 1 hour). `0` disables last-known prices.
     #[serde(default = "crate::model::contract_state::default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
+    /// Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known
+    /// ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and
+    /// [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`]. Unpriceable
+    /// collateral that is load-bearing still requires the owner.
+    #[serde(default)]
+    pub liquidation_access: LiquidationAccess,
 }
