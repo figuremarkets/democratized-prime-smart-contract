@@ -246,7 +246,7 @@ provenanced tx wasm execute $ORACLE_ADDRESS \
 
 ### KYC attribute for lenders and borrowers
 
-Provenance uses **name bindings** and **attributes**. pool_v2 can require that lenders (and Transfer recipients) have a given attribute (e.g. `lender.kyc.pb`). The contract only checks that the attribute **exists** on the account; value/type do not matter.
+Provenance uses **name bindings** and **attributes**. pool_v2 can require that lenders (and Transfer recipients) have a given attribute (e.g. `lender.kyc.pb`). The contract only checks that the attribute **exists** on the account; value/type do not matter. Required-attribute strings follow the same matching rules as marker `--required-attributes`.
 
 When the **lending marker** is restricted with `--required-attributes=lender.kyc.pb`, any account that **receives** the lending denom (including the **borrower** on Borrow) must have that attribute at the chain level. For consistency, set **`borrower_required_attrs`** to the same list (e.g. `["lender.kyc.pb"]`) in pool_v2 so only KYC'd accounts can Borrow, AddCollateral, and RemoveCollateral — and grant the attribute to the borrower (see section 3.2).
 

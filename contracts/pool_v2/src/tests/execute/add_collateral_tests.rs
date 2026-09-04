@@ -20,7 +20,8 @@ use democratized_prime_lib::price_oracle::model::PriceMapResponse;
 use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use provwasm_mocks::mock_provenance_dependencies;
 use provwasm_std::types::provenance::attribute::v1::{
-    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse,
+    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse, QueryScanRequest,
+    QueryScanResponse,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
@@ -448,4 +449,41 @@ fn add_collateral_succeeds_when_already_held_denom_is_stale() {
 
     let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
     assert_eq!(collateral.amounts.get(ASSET_ONE), Some(&150));
+}
+
+#[test]
+fn add_collateral_succeeds_when_wildcard_borrower_attr_matches() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+    let mut msg = default_instantiate_msg();
+    msg.borrower_required_attrs = vec!["*.kyb.pb".to_string()];
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap();
+
+    let scan_response = QueryScanResponse {
+        account: BORROWER.to_string(),
+        attributes: vec![Attribute {
+            name: "xyz.kyb.pb".to_string(),
+            value: b"verified".to_vec(),
+            attribute_type: AttributeType::String.into(),
+            address: "".to_string(),
+            expiration_date: None,
+            concrete_type: "".to_owned(),
+        }],
+        pagination: None,
+    };
+    QueryScanRequest::mock_response(&mut deps.querier, scan_response);
+    mock_fresh_supported_prices(&mut deps.querier, env.block.time);
+
+    let info = message_info(&Addr::unchecked(BORROWER), &[coin(100, ASSET_ONE)]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::AddCollateral {})
+        .expect("add_collateral should succeed with wildcard borrower attr");
+
+    assert_eq!(res.attributes[0].value, ACTION);
 }

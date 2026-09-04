@@ -130,3 +130,23 @@ fn set_borrower_required_attrs_fails_when_over_max_attrs() {
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
 }
+
+#[test]
+fn set_borrower_required_attrs_fails_on_invalid_wildcard_pattern() {
+    let (mut deps, env) = setup_instantiated_contract();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::SetBorrowerRequiredAttrs {
+            borrower_required_attrs: vec!["*kyb.pb".to_string()],
+        },
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("only leading *.suffix"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}

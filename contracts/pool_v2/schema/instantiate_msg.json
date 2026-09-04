@@ -31,7 +31,7 @@
       ]
     },
     "borrower_required_attrs": {
-      "description": "Attribute names for borrowing: sender must have all of these. - Empty list = no attribute required.",
+      "description": "Attribute names for borrowing: sender must have all of these. Matching follows marker `--required-attributes` conventions. Empty list = no check.",
       "type": "array",
       "items": {
         "type": "string"
@@ -58,7 +58,7 @@
       "type": "string"
     },
     "lender_required_attrs": {
-      "description": "Attribute names for lending: sender must have all of these (Provenance attributes). - Empty list = no attribute required.",
+      "description": "Attribute names for lending: sender must have all of these (Provenance attributes). Matching follows marker `--required-attributes` conventions. Empty list = no check.",
       "type": "array",
       "items": {
         "type": "string"

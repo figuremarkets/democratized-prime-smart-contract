@@ -9,6 +9,7 @@ use crate::model::{
 };
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{set_contract_state_v1, set_reserve_state_v1};
+use crate::utils::validate_required_attr_patterns;
 use cosmwasm_std::{
     ensure, to_json_binary, Addr, CosmosMsg, Decimal256, DepsMut, Env, MessageInfo, Response,
     SubMsg, WasmMsg,
@@ -170,6 +171,8 @@ pub fn instantiate_contract(
             MAX_LENDER_BORROWER_REQUIRED_ATTRS
         ))
     );
+    validate_required_attr_patterns(&msg.lender_required_attrs)?;
+    validate_required_attr_patterns(&msg.borrower_required_attrs)?;
 
     let custodian: Addr = deps.api.addr_validate(msg.custodian.trim())?;
 

@@ -73,7 +73,7 @@ We **store** one `ReserveStateV1` (singleton). On **queries**, we use an **effec
 | `contract_name`, `description` | Metadata. |
 | `lending_denom` | The asset lent/borrowed (e.g. YLDS). |
 | `rate_params` | Kink model parameters (see above). |
-| `lender_required_attrs`, `borrower_required_attrs` | List of Provenance attribute names: sender must have **all** of these to lend (or receive Transfer) / to borrow (or add/remove collateral). Empty list = no attribute required. Updatable by the contract owner via **SetLenderRequiredAttrs** / **SetBorrowerRequiredAttrs**. |
+| `lender_required_attrs`, `borrower_required_attrs` | List of Provenance attribute names: sender must have **all** of these to lend (or receive Transfer) / to borrow (or add/remove collateral). Matching follows the marker module's `--required-attributes` rules. Empty list = no attribute required. Updatable by the contract owner via **SetLenderRequiredAttrs** / **SetBorrowerRequiredAttrs**. |
 | `price_oracle_address` | Contract used for collateral prices (for LTV/health). |
 | `max_borrower_collateral_types` | Max number of collateral asset types per borrower. |
 | `max_liquidation_staleness_seconds` | Outer bound on last-known oracle prices for liquidation (default **1 hour**, hard cap **24 hours** under **owner-only**). Expired prices older than this are unpriceable (valued at $0, not seizable). `0` disables last-known. Borrow/RemoveCollateral still give no credit for collateral past the *oracle* freshness window (seconds); this bound applies only to Liquidate. **Permissionless** last-known cannot exceed **1 hour** (instantiate and `UpdateContractConfig` reject the combination). |

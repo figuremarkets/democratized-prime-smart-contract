@@ -1063,3 +1063,26 @@ fn instantiate_fails_when_borrower_required_attrs_exceed_limit() {
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
 }
+
+#[test]
+fn instantiate_fails_on_invalid_wildcard_lender_attr() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.lender_required_attrs = vec!["*kyb.pb".to_string()];
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("only leading *.suffix"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}

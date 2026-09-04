@@ -27,5 +27,5 @@ pub use rates::{
 pub use response_ext::WithRates;
 pub use validation::{
     validate_borrower_attrs, validate_borrower_collateral_type_limit, validate_lender_attrs,
-    validate_single_coin_denom,
+    validate_required_attr_pattern, validate_required_attr_patterns, validate_single_coin_denom,
 };

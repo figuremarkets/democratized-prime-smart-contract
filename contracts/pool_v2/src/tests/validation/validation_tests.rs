@@ -2,12 +2,16 @@
 
 use crate::model::error::ContractError;
 use crate::model::Denom;
-use crate::utils::{validate_borrower_attrs, validate_lender_attrs, validate_single_coin_denom};
+use crate::utils::{
+    validate_borrower_attrs, validate_lender_attrs, validate_required_attr_pattern,
+    validate_single_coin_denom,
+};
 use cosmwasm_std::testing::message_info;
 use cosmwasm_std::{coin, Addr, Uint128};
 use provwasm_mocks::mock_provenance_dependencies;
 use provwasm_std::types::provenance::attribute::v1::{
-    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse,
+    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse, QueryScanRequest,
+    QueryScanResponse,
 };
 
 const LENDING_DENOM: &str = "uylds.fcc";
@@ -119,6 +123,122 @@ fn setup_attribute(
     QueryAttributeRequest::mock_response(querier, response);
 }
 
+fn setup_scan_attributes(
+    querier: &mut provwasm_mocks::MockProvenanceQuerier,
+    account: &str,
+    attrs: Vec<(&str, &str)>,
+) {
+    let response = QueryScanResponse {
+        account: account.to_string(),
+        attributes: attrs
+            .into_iter()
+            .map(|(name, value)| Attribute {
+                name: name.to_string(),
+                value: value.as_bytes().to_vec(),
+                attribute_type: AttributeType::String.into(),
+                address: "".to_string(),
+                expiration_date: None,
+                concrete_type: "".to_owned(),
+            })
+            .collect(),
+        pagination: None,
+    };
+    QueryScanRequest::mock_response(querier, response);
+}
+
+fn setup_empty_scan(querier: &mut provwasm_mocks::MockProvenanceQuerier, account: &str) {
+    setup_scan_attributes(querier, account, vec![]);
+}
+
+// ---- validate_required_attr_pattern ----
+
+#[test]
+fn required_attr_pattern_accepts_exact_name() {
+    validate_required_attr_pattern("lender.kyc.pb").unwrap();
+}
+
+#[test]
+fn required_attr_pattern_accepts_leading_wildcard() {
+    validate_required_attr_pattern("*.kyb.pb").unwrap();
+}
+
+#[test]
+fn required_attr_pattern_rejects_empty_name() {
+    let err = validate_required_attr_pattern("").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("cannot be empty"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_mid_wildcard() {
+    let err = validate_required_attr_pattern("kyb.*.pb").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("only leading *.suffix"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_wildcard_without_dot() {
+    let err = validate_required_attr_pattern("*kyb.pb").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("only leading *.suffix"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_empty_wildcard_suffix() {
+    let err = validate_required_attr_pattern("*.").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("non-empty suffix"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_whitespace_only() {
+    let err = validate_required_attr_pattern("   ").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("cannot be empty"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_internal_whitespace() {
+    let err = validate_required_attr_pattern("lender .kyc").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("whitespace"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn required_attr_pattern_rejects_empty_suffix_segments() {
+    let err = validate_required_attr_pattern("*..pb").unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("empty name segments"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
 #[test]
 fn lender_attrs_ok_when_empty_list() {
     let deps = mock_provenance_dependencies();
@@ -166,6 +286,122 @@ fn lender_attrs_ok_when_all_present() {
         &deps.as_ref().querier,
         "tp1user",
         &["lender.kyc".to_string(), "lender.accredited".to_string()],
+    )
+    .unwrap();
+}
+
+#[test]
+fn lender_attrs_fail_when_only_one_of_two_required() {
+    let mut deps = mock_provenance_dependencies();
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("figure.kyb.pb", "verified")],
+    );
+    let err = validate_lender_attrs(
+        &deps.as_ref().querier,
+        "tp1user",
+        &["*.kyb.pb".to_string(), "*.kyc.pb".to_string()],
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::NotAuthorizedError { message } => {
+            assert!(message.contains("*.kyc.pb"));
+        }
+        _ => panic!("expected NotAuthorizedError, got {:?}", err),
+    }
+}
+
+#[test]
+fn lender_attrs_ok_when_wildcard_matches() {
+    let mut deps = mock_provenance_dependencies();
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("figure.kyb.pb", "verified")],
+    );
+    validate_lender_attrs(&deps.as_ref().querier, "tp1user", &["*.kyb.pb".to_string()]).unwrap();
+}
+
+#[test]
+fn lender_attrs_fail_when_wildcard_no_match() {
+    let mut deps = mock_provenance_dependencies();
+    setup_empty_scan(&mut deps.querier, "tp1user");
+    let err = validate_lender_attrs(&deps.as_ref().querier, "tp1user", &["*.kyb.pb".to_string()])
+        .unwrap_err();
+    match &err {
+        ContractError::NotAuthorizedError { message } => {
+            assert!(message.contains("*.kyb.pb"));
+        }
+        _ => panic!("expected NotAuthorizedError, got {:?}", err),
+    }
+}
+
+#[test]
+fn lender_attrs_fail_when_wildcard_suffix_only() {
+    let mut deps = mock_provenance_dependencies();
+    // `kyb.pb` alone does not satisfy `*.kyb.pb` (needs a prefix segment).
+    setup_scan_attributes(&mut deps.querier, "tp1user", vec![("kyb.pb", "verified")]);
+    let err = validate_lender_attrs(&deps.as_ref().querier, "tp1user", &["*.kyb.pb".to_string()])
+        .unwrap_err();
+    match &err {
+        ContractError::NotAuthorizedError { message } => {
+            assert!(message.contains("*.kyb.pb"));
+        }
+        _ => panic!("expected NotAuthorizedError, got {:?}", err),
+    }
+}
+
+#[test]
+fn wildcard_rejects_suffix_injection_from_scan() {
+    let mut deps = mock_provenance_dependencies();
+    // Scan on suffix `fiat.pb` returns a raw-suffix false positive.
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("hackfiat.pb", "verified")],
+    );
+    let err = validate_lender_attrs(
+        &deps.as_ref().querier,
+        "tp1user",
+        &["*.fiat.pb".to_string()],
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::NotAuthorizedError { .. } => {}
+        _ => panic!("expected NotAuthorizedError, got {:?}", err),
+    }
+}
+
+#[test]
+fn wildcard_accepts_segment_match_among_scan_false_positives() {
+    let mut deps = mock_provenance_dependencies();
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("hackfiat.pb", "no"), ("figuremarkets.fiat.pb", "verified")],
+    );
+    validate_lender_attrs(
+        &deps.as_ref().querier,
+        "tp1user",
+        &["*.fiat.pb".to_string()],
+    )
+    .unwrap();
+}
+
+#[test]
+fn lender_attrs_ok_when_exact_and_wildcard_both_required() {
+    let mut deps = mock_provenance_dependencies();
+    setup_attribute(&mut deps.querier, "tp1user", "lender.accredited", "true");
+    setup_scan_attributes(
+        &mut deps.querier,
+        "tp1user",
+        vec![("xyz.kyb.pb", "verified")],
+    );
+    validate_lender_attrs(
+        &deps.as_ref().querier,
+        "tp1user",
+        &["*.kyb.pb".to_string(), "lender.accredited".to_string()],
     )
     .unwrap();
 }

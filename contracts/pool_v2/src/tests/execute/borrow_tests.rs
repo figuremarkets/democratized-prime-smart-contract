@@ -24,7 +24,8 @@ use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMap
 use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use provwasm_mocks::mock_provenance_dependencies;
 use provwasm_std::types::provenance::attribute::v1::{
-    QueryAttributeRequest, QueryAttributeResponse,
+    Attribute, AttributeType, QueryAttributeRequest, QueryAttributeResponse, QueryScanRequest,
+    QueryScanResponse,
 };
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -584,4 +585,65 @@ fn borrow_fails_when_oracle_price_is_stale_for_collateral_asset() {
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
+}
+
+#[test]
+fn borrow_succeeds_when_wildcard_borrower_attr_matches() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    let scan_response = QueryScanResponse {
+        account: BORROWER.to_string(),
+        attributes: vec![Attribute {
+            name: "figure.kyb.pb".to_string(),
+            value: b"verified".to_vec(),
+            attribute_type: AttributeType::String.into(),
+            address: "".to_string(),
+            expiration_date: None,
+            concrete_type: "".to_owned(),
+        }],
+        pagination: None,
+    };
+    QueryScanRequest::mock_response(&mut deps.querier, scan_response);
+
+    let mut msg = default_instantiate_msg();
+    msg.borrower_required_attrs = vec!["*.kyb.pb".to_string()];
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(100_000_000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(250, COLLATERAL_BTC)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .unwrap();
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(10_000_000),
+        },
+    )
+    .expect("borrow should succeed with wildcard borrower attr");
 }
