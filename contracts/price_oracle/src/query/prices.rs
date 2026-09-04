@@ -1,4 +1,4 @@
-use crate::model::{error::QueryError, AssetMappingV1, IntoAssetPriceResponse, PriceV1};
+use crate::model::{error::QueryError, AssetMappingV1, IntoAssetPriceResponse};
 use crate::storage::{
     get_or_default_asset_mapping_v1, get_sorted_prices_v1, try_get_asset_mapping_v1,
     try_get_usd_price_v1,
@@ -10,16 +10,18 @@ use std::collections::HashMap;
 
 /// Query prices by asset ID.
 ///
-/// If an asset provided in `assets` does not exist, an error will be returned.
+/// If an asset provided in `assets` does not exist and `skip_missing` is false, an error is
+/// returned. When `skip_missing` is true, those assets are omitted from the result map.
 ///
 /// # Arguments
 ///
-/// * `current_time` - The time of the request.
 /// * `assets` -  A [`Vec`] of asset IDs.
+/// * `skip_missing` - Omit assets with no stored price instead of erroring.
 #[allow(clippy::single_match)]
 pub fn query_prices_by_assets(
     store: &dyn Storage,
     assets: Vec<String>,
+    skip_missing: bool,
 ) -> Result<Binary, QueryError> {
     let mut prices: PriceMapResponse = HashMap::new();
 
@@ -27,11 +29,14 @@ pub fn query_prices_by_assets(
         let (_alt_asset_id, display_asset_metadata): (String, AssetMappingV1) =
             get_or_default_asset_mapping_v1(store, &requested_asset_id)?;
 
-        let price: PriceV1 = try_get_usd_price_v1(store, &display_asset_metadata.asset_id)?.ok_or(
-            QueryError::NotFoundError {
+        let Some(price) = try_get_usd_price_v1(store, &display_asset_metadata.asset_id)? else {
+            if skip_missing {
+                continue;
+            }
+            return Err(QueryError::NotFoundError {
                 message: display_asset_metadata.asset_id.clone(),
-            },
-        )?;
+            });
+        };
 
         prices.insert(
             requested_asset_id,

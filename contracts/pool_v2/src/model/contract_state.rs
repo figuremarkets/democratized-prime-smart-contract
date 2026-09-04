@@ -6,6 +6,28 @@ use crate::model::collateral::CollateralAssetV1;
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{Denom, RateParamsV1};
 
+/// Default outer bound on last-known oracle prices used for liquidation (1 hour).
+/// Long enough to ride out an ordinary oracle interruption (~120× a 30s heartbeat);
+/// short enough that a frozen feed cannot be farmed. `0` means any expired price
+/// is unpriceable (last-known disabled).
+///
+/// Borrow / RemoveCollateral still require a **fresh** lending-denom price and give no
+/// credit for stale collateral (oracle staleness threshold, typically tens of seconds).
+/// Liquidation may use last-known prices up to this bound. Do not enable permissionless
+/// liquidation against [`MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`].
+pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 60 * 60;
+
+/// Hard cap so a custodian cannot restore last-known prices into "this quote is
+/// meaningless" territory.
+pub const MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS: u64 = 24 * 60 * 60;
+
+const _: () =
+    assert!(DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS);
+
+pub fn default_max_liquidation_staleness_seconds() -> u64 {
+    DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS
+}
+
 /// How bad-debt liquidation (residual scaled debt after collateral exhausted) hits suppliers.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -111,6 +133,13 @@ pub struct ContractStateV1 {
     /// - update contract rate parameters
     /// - update the types of collateral supported by the contract
     pub custodian: Option<Addr>,
+
+    /// Seconds past oracle expiration after which a stored price is unpriceable for
+    /// liquidation (valued at $0, not seizable). Fresh prices and last-known prices still
+    /// within this bound remain usable. Default 1 hour; capped at 24 hours. `0` disables
+    /// last-known prices.
+    #[serde(rename = "mlss", default = "default_max_liquidation_staleness_seconds")]
+    pub max_liquidation_staleness_seconds: u64,
 }
 
 impl ContractStateV1 {

@@ -6,10 +6,13 @@
 
 use crate::model::collateral::BorrowerCollateralV1;
 use crate::model::error::ContractError;
+use crate::model::DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS;
 use crate::storage::{get_contract_state_v1, set_borrower_collateral};
-use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
+use crate::tests::fixtures::{fresh_oracle_price, oracle_price_expired_for, stale_oracle_price};
 use crate::tests::query::common::{setup_instantiated, ORACLE, SOME_USER};
-use crate::utils::{get_asset_prices_for_borrower, get_price_from_oracle};
+use crate::utils::{
+    get_asset_prices_for_borrower, get_asset_prices_for_liquidation, get_price_from_oracle,
+};
 use cosmwasm_std::{
     from_json, to_json_binary, Addr, ContractResult, Decimal256, QuerierResult, SystemError,
     SystemResult, WasmQuery,
@@ -26,7 +29,7 @@ fn get_price_from_oracle_fails_when_oracle_not_mocked() {
     let oracle = Addr::unchecked("oracle");
     let assets = vec!["lend".to_string(), "btc".to_string()];
 
-    let err = get_price_from_oracle(&deps.as_ref().querier, &oracle, &assets).unwrap_err();
+    let err = get_price_from_oracle(&deps.as_ref().querier, &oracle, &assets, false).unwrap_err();
 
     match &err {
         ContractError::Std(_) => {}
@@ -55,7 +58,7 @@ fn mock_price_oracle(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
@@ -102,7 +105,7 @@ fn get_asset_prices_for_borrower_succeeds_when_prices_fresh() {
 }
 
 #[test]
-fn get_asset_prices_for_borrower_fails_when_any_price_is_stale() {
+fn get_asset_prices_for_borrower_omits_stale_collateral() {
     let (mut deps, env) = setup_instantiated();
     let mut amounts = BTreeMap::new();
     amounts.insert("asset.one".to_string(), 1u128);
@@ -122,6 +125,38 @@ fn get_asset_prices_for_borrower_fails_when_any_price_is_stale() {
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
 
+    let result = get_asset_prices_for_borrower(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert!(result.contains_key("uylds.fcc"));
+    assert!(!result.contains_key("asset.one"));
+}
+
+#[test]
+fn get_asset_prices_for_borrower_fails_when_lending_denom_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
     let err = get_asset_prices_for_borrower(
         &deps.as_ref().querier,
         &env.block.time,
@@ -132,7 +167,278 @@ fn get_asset_prices_for_borrower_fails_when_any_price_is_stale() {
 
     match &err {
         ContractError::StalePriceDataError { asset_id, .. } => {
-            assert_eq!(asset_id, "asset.one");
+            assert_eq!(asset_id, "uylds.fcc");
+        }
+        _ => panic!("expected StalePriceDataError, got {:?}", err),
+    }
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_keeps_stale_collateral_last_known() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    amounts.insert("asset.two".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.two".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let result = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.prices.get("asset.one").unwrap().display_price_usd,
+        Decimal256::one()
+    );
+    assert_eq!(
+        result.prices.get("asset.two").unwrap().display_price_usd,
+        Decimal256::one()
+    );
+    assert_eq!(
+        result.prices.get("uylds.fcc").unwrap().display_price_usd,
+        Decimal256::one()
+    );
+    assert!(result.unpriceable.is_empty());
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_marks_missing_collateral_unpriceable() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    amounts.insert("asset.two".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let result = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.prices.get("asset.one").unwrap().display_price_usd,
+        Decimal256::one()
+    );
+    assert!(!result.prices.contains_key("asset.two"));
+    assert!(result.unpriceable.contains("asset.two"));
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_marks_zero_price_collateral_unpriceable() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    amounts.insert("asset.two".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.two".to_string(),
+        fresh_oracle_price(Decimal256::zero(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let result = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert!(result.prices.contains_key("asset.one"));
+    assert!(!result.prices.contains_key("asset.two"));
+    assert!(result.unpriceable.contains("asset.two"));
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_uses_stale_lending_denom_last_known() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let result = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.prices.get("uylds.fcc").unwrap().display_price_usd,
+        Decimal256::one()
+    );
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_marks_beyond_bound_collateral_unpriceable() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    amounts.insert("asset.two".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.two".to_string(),
+        oracle_price_expired_for(
+            Decimal256::one(),
+            env.block.time,
+            DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+        ),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let result = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert!(result.prices.contains_key("asset.one"));
+    assert!(!result.prices.contains_key("asset.two"));
+    assert!(result.unpriceable.contains("asset.two"));
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_fails_when_lending_denom_is_missing() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let err = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::NotFoundError { message } => {
+            assert!(message.contains("uylds.fcc"));
+        }
+        _ => panic!("expected NotFoundError, got {:?}", err),
+    }
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_fails_when_lending_denom_beyond_bound() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        oracle_price_expired_for(
+            Decimal256::one(),
+            env.block.time,
+            DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+        ),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let err = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::StalePriceDataError { asset_id, .. } => {
+            assert_eq!(asset_id, "uylds.fcc");
         }
         _ => panic!("expected StalePriceDataError, got {:?}", err),
     }

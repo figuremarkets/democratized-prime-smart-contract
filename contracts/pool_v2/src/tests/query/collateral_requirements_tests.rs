@@ -2,7 +2,7 @@
 
 use crate::contract::query;
 use crate::model::error::{ContractError, QueryError};
-use crate::model::{BorrowerCollateralV1, ReserveStateV1};
+use crate::model::{BorrowerCollateralV1, CollateralRequirementsResponseV1, ReserveStateV1};
 use crate::msg::QueryMsg;
 use crate::storage::{
     get_reserve_state_v1, set_borrower_collateral, set_reserve_state_v1, set_scaled_borrow,
@@ -32,7 +32,7 @@ fn set_oracle_prices(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
@@ -69,6 +69,8 @@ fn get_collateral_requirements_zero_loan_no_borrower_returns_zeros() {
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
+    assert_eq!(required[0]["satisfiable"], true);
+    assert!(res["unpriceable_collateral"].as_array().unwrap().is_empty());
 }
 
 /// Borrower with no existing debt and zero new loan → full path returns zeros.
@@ -103,6 +105,8 @@ fn get_collateral_requirements_zero_loan_borrower_no_debt_returns_zeros() {
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
+    assert_eq!(required[0]["satisfiable"], true);
+    assert!(res["unpriceable_collateral"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -141,7 +145,7 @@ fn get_collateral_requirements_fails_when_oracle_has_no_lending_denom_price() {
 }
 
 #[test]
-fn get_collateral_requirements_fails_when_oracle_has_no_price_for_requested_collateral_asset() {
+fn get_collateral_requirements_returns_zero_amount_when_requested_asset_has_no_price() {
     let (mut deps, env) = setup_instantiated();
     let mut prices = HashMap::new();
     prices.insert(
@@ -154,7 +158,7 @@ fn get_collateral_requirements_fails_when_oracle_has_no_price_for_requested_coll
     );
     set_oracle_prices(&mut deps, prices);
 
-    let err = query(
+    let bin = query(
         deps.as_ref(),
         env,
         QueryMsg::GetCollateralRequirements {
@@ -163,20 +167,23 @@ fn get_collateral_requirements_fails_when_oracle_has_no_price_for_requested_coll
             collateral_assets: vec!["asset.one".to_string(), "asset.unknown".to_string()],
         },
     )
-    .unwrap_err();
-    match &err {
-        QueryError::Contract(_) => {}
-        _ => panic!(
-            "expected Contract error (missing price for asset), got {:?}",
-            err
-        ),
-    }
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Price of asset") && msg.contains("asset.unknown"),
-        "error should mention missing price for requested asset: {}",
-        msg
-    );
+    .expect("missing requested asset should be valued at zero, not error");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    let unknown = resp
+        .required
+        .iter()
+        .find(|r| r.asset_id == "asset.unknown")
+        .expect("preserve 1:1 with collateral_assets");
+    assert!(unknown.amount.is_zero());
+    assert!(!unknown.satisfiable);
+    let priced = resp
+        .required
+        .iter()
+        .find(|r| r.asset_id == "asset.one")
+        .expect("priced requested asset stays quotable");
+    assert!(priced.satisfiable);
+    assert!(!priced.amount.is_zero());
+    assert!(resp.unpriceable_collateral.is_empty());
 }
 
 #[test]
@@ -214,6 +221,7 @@ fn get_collateral_requirements_with_oracle_returns_required_value_and_per_asset(
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "1563");
+    assert_eq!(required[0]["satisfiable"], true);
 }
 
 /// When borrower has existing collateral, per-asset "required" is the *additional* amount needed, not the full amount.
@@ -269,6 +277,7 @@ fn get_collateral_requirements_with_borrower_subtracts_existing_collateral() {
         required[0]["amount"], "1063",
         "additional asset.one needed (850/0.8 ceil), not full 1563"
     );
+    assert_eq!(required[0]["satisfiable"], true);
 }
 
 /// When an asset has value_per_unit zero (e.g. oracle price 0), it is still included in `required`
@@ -309,6 +318,7 @@ fn get_collateral_requirements_zero_value_per_unit_includes_asset_with_zero_amou
         required[0]["amount"], "0",
         "zero value_per_unit yields amount 0, not omitted"
     );
+    assert_eq!(required[0]["satisfiable"], false);
 }
 
 /// When borrower has existing debt and new_loan_amount is 0, required_collateral_value_usd must
@@ -398,6 +408,138 @@ fn get_collateral_requirements_fails_when_oracle_returns_stale_price() {
     }
 }
 
+#[test]
+fn get_collateral_requirements_is_not_quotable_when_requested_collateral_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: None,
+            new_loan_amount: Uint128::new(1000),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("stale requested collateral should be unquotable, not a query error");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    assert!(resp.required[0].amount.is_zero());
+    assert!(
+        !resp.required[0].satisfiable,
+        "stale requested asset is unquotable, not “need none”"
+    );
+    assert!(
+        resp.unpriceable_collateral.is_empty(),
+        "no borrower holdings; unpriceable_collateral is held denoms only"
+    );
+}
+
+#[test]
+fn get_collateral_requirements_succeeds_when_held_collateral_price_is_stale() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 10u128);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .expect("set borrower collateral");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: Some(SOME_USER.to_string()),
+            new_loan_amount: Uint128::zero(),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("stale held collateral must not fail the requirements query");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    assert!(resp.required[0].amount.is_zero());
+    assert!(
+        resp.required[0].satisfiable,
+        "zero additional needed is a real quote even if the requested feed is stale"
+    );
+    assert_eq!(resp.unpriceable_collateral, vec!["asset.one".to_string()]);
+}
+
+/// A dark holding is omitted from additional-needed credit even when it is not in
+/// `collateral_assets`, so `required` has no `satisfiable: false` row for it.
+#[test]
+fn get_collateral_requirements_names_unpriceable_held_asset_omitted_from_requested() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 10u128);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .expect("set borrower collateral");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.two".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: Some(SOME_USER.to_string()),
+            new_loan_amount: Uint128::new(1000),
+            collateral_assets: vec!["asset.two".to_string()],
+        },
+    )
+    .expect("stale held collateral must not fail the requirements query");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+
+    assert_eq!(resp.unpriceable_collateral, vec!["asset.one".to_string()]);
+    let additional: &str = resp.additional_collateral_value_usd.as_str();
+    assert!(
+        additional.starts_with("1250"),
+        "dark holding must not reduce additional needed, got {}",
+        additional
+    );
+    assert_eq!(resp.required.len(), 1);
+    assert_eq!(resp.required[0].asset_id, "asset.two");
+    assert!(resp.required[0].satisfiable);
+    assert!(!resp.required[0].amount.is_zero());
+}
+
 /// 18-decimal collateral at $1e-18: required base units exceed u128. Query still
 /// returns (amount 0 = no finite representable amount), rather than erroring wholesale.
 #[test]
@@ -438,4 +580,5 @@ fn get_collateral_requirements_cheap_18_decimal_asset_returns_zero_amount() {
     assert_eq!(required.len(), 1);
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
+    assert_eq!(required[0]["satisfiable"], false);
 }

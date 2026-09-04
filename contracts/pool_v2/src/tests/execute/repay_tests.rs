@@ -57,6 +57,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 3600,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
@@ -89,7 +90,7 @@ fn set_oracle_prices(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
@@ -132,6 +133,11 @@ fn setup_borrower_with_debt() -> (
     )
     .expect("lend should succeed");
 
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    set_oracle_prices(&mut deps.querier, prices);
+
     execute(
         deps.as_mut(),
         env.clone(),
@@ -139,11 +145,6 @@ fn setup_borrower_with_debt() -> (
         ExecuteMsg::AddCollateral {},
     )
     .expect("add_collateral should succeed");
-
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
-    set_oracle_prices(&mut deps.querier, prices);
 
     let borrow_amount = 10_000_000u128;
     execute(

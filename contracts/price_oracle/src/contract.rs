@@ -81,7 +81,10 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, QueryError>
         QueryMsg::GetPrices { prev_asset, limit } => {
             query_prices_batch(deps.storage, prev_asset, limit)
         }
-        QueryMsg::GetPricesByAsset { assets } => query_prices_by_assets(deps.storage, assets),
+        QueryMsg::GetPricesByAsset {
+            assets,
+            skip_missing,
+        } => query_prices_by_assets(deps.storage, assets, skip_missing),
     }
 }
 

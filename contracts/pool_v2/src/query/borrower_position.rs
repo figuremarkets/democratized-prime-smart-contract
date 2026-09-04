@@ -1,4 +1,5 @@
-//! GetBorrowerPosition: full borrower view (debt, collateral amounts, collateral value USD, LTV, health).
+//! GetBorrowerPosition: full borrower view (debt, collateral amounts, unpriceable denoms,
+//! collateral value USD, LTV, health).
 use crate::model::error::QueryError;
 use crate::model::health::BorrowerHealthResponseV1;
 use crate::model::query::{AssetRequirementV1, BorrowerPositionResponseV1};
@@ -23,15 +24,8 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
     let borrower_collateral =
         get_borrower_collateral(deps.storage, address).map_err(QueryError::Contract)?;
 
-    let collateral: Vec<AssetRequirementV1> = borrower_collateral
-        .amounts
-        .iter()
-        .map(|(id, amt)| AssetRequirementV1 {
-            asset_id: id.clone(),
-            amount: Uint128::from(*amt),
-        })
-        .collect();
-
+    let mut collateral: Vec<AssetRequirementV1> = Vec::new();
+    let mut unpriceable_collateral = Vec::new();
     let (collateral_value_usd, loan_to_value, health, health_unknown_reason) =
         if borrower_collateral.amounts.is_empty() {
             (
@@ -52,6 +46,24 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
                 &borrower_collateral,
             )
             .map_err(QueryError::Contract)?;
+
+            unpriceable_collateral = borrower_collateral
+                .amounts
+                .keys()
+                .filter(|id| !prices.contains_key(*id))
+                .cloned()
+                .collect();
+            collateral = borrower_collateral
+                .amounts
+                .iter()
+                .map(|(id, amt)| {
+                    AssetRequirementV1::holding(
+                        id.clone(),
+                        Uint128::from(*amt),
+                        prices.contains_key(id),
+                    )
+                })
+                .collect();
 
             let collateral_value = calculate_total_collateral_value_usd(
                 &borrower_collateral,
@@ -92,6 +104,7 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
         underlying_debt_display: contract.lending_denom.base_to_display(underlying_debt)?,
         lending_denom: contract.lending_denom,
         collateral,
+        unpriceable_collateral,
         collateral_value_usd,
         loan_to_value,
         health,

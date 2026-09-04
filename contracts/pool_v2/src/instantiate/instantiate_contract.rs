@@ -3,7 +3,9 @@ use crate::constants::{
     MAX_LENDER_BORROWER_REQUIRED_ATTRS, REPO_TOKEN_INSTANTIATE_REPLY_ID,
 };
 use crate::model::error::{illegal_argument, ContractError};
-use crate::model::{ContractStateV1, OperationalState, ReserveStateV1};
+use crate::model::{
+    ContractStateV1, OperationalState, ReserveStateV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+};
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{set_contract_state_v1, set_reserve_state_v1};
 use cosmwasm_std::{
@@ -144,6 +146,10 @@ pub fn instantiate_contract(
         illegal_argument("max_borrower_collateral_types must be at least 1")
     );
     ensure!(
+        msg.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+        illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
+    );
+    ensure!(
         msg.lender_required_attrs.len() <= MAX_LENDER_BORROWER_REQUIRED_ATTRS,
         illegal_argument(format!(
             "No more than [{}] lender required attributes allowed",
@@ -158,7 +164,7 @@ pub fn instantiate_contract(
         ))
     );
 
-    let custodian: Addr = deps.api.addr_validate(&msg.custodian.trim())?;
+    let custodian: Addr = deps.api.addr_validate(msg.custodian.trim())?;
 
     let pool: Addr = env.contract.address.clone();
 
@@ -182,6 +188,7 @@ pub fn instantiate_contract(
         commit_market_id: msg.commit_market_id,
         bad_debt_loss_allocation: msg.bad_debt_loss_allocation,
         custodian: Some(custodian.to_owned()),
+        max_liquidation_staleness_seconds: msg.max_liquidation_staleness_seconds,
     };
     set_contract_state_v1(deps.storage, &contract_state)?;
     initialize_owner(deps.storage, deps.api, Some(info.sender.as_str()))?;

@@ -11,7 +11,7 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_borrower_collateral;
-use crate::tests::fixtures::stale_oracle_price;
+use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
@@ -33,6 +33,7 @@ const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 const LENDING_DENOM: &str = "uylds.fcc";
 const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 const COLLATERAL_BTC: &str = "nbtc.figure.se";
+const COLLATERAL_ETH: &str = "neth.figure.se";
 const BTC_PRICE_USD: &str = "70000";
 
 fn default_instantiate_msg() -> InstantiateMsg {
@@ -57,15 +58,22 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec![],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 3600,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
         min_lend: Uint128::new(1),
         min_borrow: Uint128::new(1),
-        supported_collateral_assets: vec![CollateralAssetV1 {
-            asset_id: COLLATERAL_BTC.to_string(),
-            haircut: Some(Decimal256::percent(80)),
-        }],
+        supported_collateral_assets: vec![
+            CollateralAssetV1 {
+                asset_id: COLLATERAL_BTC.to_string(),
+                haircut: Some(Decimal256::percent(80)),
+            },
+            CollateralAssetV1 {
+                asset_id: COLLATERAL_ETH.to_string(),
+                haircut: Some(Decimal256::percent(80)),
+            },
+        ],
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
@@ -89,7 +97,7 @@ fn set_oracle_prices(
                     });
                 }
                 match from_json::<PriceOracleQueryMsg>(msg) {
-                    Ok(PriceOracleQueryMsg::GetPricesByAsset { assets: _ }) => {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
                         SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
                     }
                     _ => SystemResult::Err(SystemError::UnsupportedRequest {
@@ -131,6 +139,11 @@ fn setup_collateral_no_debt() -> (
     )
     .expect("lend should succeed");
 
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    set_oracle_prices(&mut deps.querier, prices);
+
     execute(
         deps.as_mut(),
         env.clone(),
@@ -138,11 +151,6 @@ fn setup_collateral_no_debt() -> (
         ExecuteMsg::AddCollateral {},
     )
     .expect("add_collateral should succeed");
-
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
-    set_oracle_prices(&mut deps.querier, prices);
 
     (deps, env)
 }
@@ -212,6 +220,113 @@ fn remove_collateral_fails_when_oracle_price_is_stale() {
     match &err {
         ContractError::StalePriceDataError { .. } => {}
         _ => panic!("expected StalePriceDataError, got {:?}", err),
+    }
+}
+
+#[test]
+fn remove_collateral_of_stale_asset_is_gated_on_remaining_priced_collateral() {
+    let (mut deps, env) = setup_collateral_with_debt();
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    prices.insert(COLLATERAL_ETH.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1, COLLATERAL_ETH)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add second collateral while feed is fresh");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        LENDING_DENOM.to_string(),
+        fresh_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+    );
+    prices.insert(
+        COLLATERAL_BTC.to_string(),
+        fresh_oracle_price(Decimal256::from_str(BTC_PRICE_USD).unwrap(), env.block.time),
+    );
+    prices.insert(
+        COLLATERAL_ETH.to_string(),
+        stale_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+
+    // Removing the stale asset does not extract value: LTV is checked on remaining BTC only.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral {
+            to_remove: BTreeMap::from([(COLLATERAL_ETH.to_string(), Uint128::new(1))]),
+        },
+    )
+    .expect("removing stale collateral is allowed when remaining priced collateral is healthy");
+
+    let remaining = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert!(!remaining.amounts.contains_key(COLLATERAL_ETH));
+    assert_eq!(remaining.amounts.get(COLLATERAL_BTC), Some(&250));
+
+    // Re-add ETH, stale it, then try to remove the priced BTC — remaining would be unpriceable.
+    let mut prices = HashMap::new();
+    prices.insert(
+        LENDING_DENOM.to_string(),
+        fresh_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+    );
+    prices.insert(
+        COLLATERAL_BTC.to_string(),
+        fresh_oracle_price(Decimal256::from_str(BTC_PRICE_USD).unwrap(), env.block.time),
+    );
+    prices.insert(
+        COLLATERAL_ETH.to_string(),
+        fresh_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1, COLLATERAL_ETH)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("re-add ETH while fresh");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        LENDING_DENOM.to_string(),
+        fresh_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+    );
+    prices.insert(
+        COLLATERAL_BTC.to_string(),
+        fresh_oracle_price(Decimal256::from_str(BTC_PRICE_USD).unwrap(), env.block.time),
+    );
+    prices.insert(
+        COLLATERAL_ETH.to_string(),
+        stale_oracle_price(Decimal256::from_str("1.0").unwrap(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral {
+            to_remove: BTreeMap::from([(COLLATERAL_BTC.to_string(), Uint128::new(250))]),
+        },
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("No collateral for loans") || message.contains("Loan-to-value"),
+                "remaining stale collateral must not count as credit: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
 }
 

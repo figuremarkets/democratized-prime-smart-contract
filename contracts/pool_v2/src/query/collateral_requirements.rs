@@ -3,15 +3,18 @@
 //! Returns required collateral value (USD, after haircuts) and per-asset minimum amounts.
 //! When `borrower` is set: existing debt is included in the required total, and existing
 //! collateral is subtracted so per-asset amounts are the *additional* collateral needed.
+//! Held denoms omitted from that credit are named in `unpriceable_collateral`.
+//! Per-asset `satisfiable` is false when a positive requirement could not be quoted
+//! (deliberately coarse: down feed vs zero haircut vs unrepresentable units).
 
-use crate::model::error::{not_found, ContractError, QueryError};
+use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
 use crate::model::{haircut_percentage, CollateralRequirementsResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
 use crate::utils::health::calculate_total_collateral_value_usd;
 use crate::utils::{
-    calculate_borrow_value_usd, compute_effective_reserve, get_price_from_oracle,
-    scaled_to_underlying_borrow,
+    calculate_borrow_value_usd, compute_effective_reserve, drop_unpriceable_collateral,
+    get_price_from_oracle, scaled_to_underlying_borrow,
 };
 use cosmwasm_std::{to_json_binary, Binary, Decimal256, Deps, Env, Uint128};
 
@@ -33,11 +36,9 @@ pub fn query_collateral_requirements(
             additional_collateral_value_usd: "0".to_string(),
             required: collateral_assets
                 .iter()
-                .map(|id| AssetRequirementV1 {
-                    asset_id: id.clone(),
-                    amount: Uint128::zero(),
-                })
+                .map(|id| AssetRequirementV1::quoted(id.clone(), Uint128::zero()))
                 .collect(),
+            unpriceable_collateral: Vec::new(),
         })
         .map_err(QueryError::Std);
     }
@@ -59,19 +60,15 @@ pub fn query_collateral_requirements(
             }
         }
     }
-    let prices = get_price_from_oracle(&deps.querier, &contract.price_oracle_address, &asset_ids)
+    let mut prices = get_price_from_oracle(
+        &deps.querier,
+        &contract.price_oracle_address,
+        &asset_ids,
+        true,
+    )
+    .map_err(QueryError::Contract)?;
+    drop_unpriceable_collateral(&mut prices, &contract.lending_denom.name, &env.block.time)
         .map_err(QueryError::Contract)?;
-
-    // Check the price data for staleness:
-    for (asset_id, price) in prices.iter() {
-        if price.is_stale(env.block.time) {
-            return Err(ContractError::StalePriceDataError {
-                asset_id: asset_id.clone(),
-                expired_at: price.expired_at(),
-            }
-            .into());
-        }
-    }
 
     let new_loan_value_usd =
         calculate_borrow_value_usd(new_loan_amount, &contract.lending_denom.name, &prices)
@@ -119,36 +116,54 @@ pub fn query_collateral_requirements(
 
     let mut required: Vec<AssetRequirementV1> = Vec::with_capacity(collateral_assets.len());
     for asset_id in collateral_assets {
+        // Need none of every asset — a missing feed is not a failed quote.
+        if value_to_cover.is_zero() {
+            required.push(AssetRequirementV1::quoted(
+                asset_id.clone(),
+                Uint128::zero(),
+            ));
+            continue;
+        }
         let haircut = haircut_percentage(&contract.supported_collateral_assets, asset_id);
-        let price = prices.get(asset_id).ok_or_else(|| {
-            QueryError::Contract(not_found(format!("Price of asset: {}", asset_id)))
-        })?;
-        let amount = if price.is_zero_price() || haircut.is_zero() {
-            // Asset has zero value per unit (e.g. price or haircut is 0); no finite amount satisfies. Preserve 1:1 with collateral_assets.
-            Uint128::zero()
-        } else {
-            // units * (display / 10^precision) * haircut >= value_to_cover
-            let pre_haircut = value_to_cover
-                .checked_div(haircut)
-                .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
-            match price.amount_from_usd(pre_haircut) {
-                Ok(amt) => Uint128::from(amt),
-                // Cheap high-precision asset: required base units do not fit u128.
-                // Same as zero-price: no finite representable amount satisfies.
-                Err(ContractError::AmountNotRepresentable) => Uint128::zero(),
-                Err(e) => return Err(QueryError::Contract(e)),
+        let req = match prices.get(asset_id) {
+            None => AssetRequirementV1::unquotable(asset_id.clone()),
+            Some(price) if price.is_zero_price() || haircut.is_zero() => {
+                AssetRequirementV1::unquotable(asset_id.clone())
+            }
+            Some(price) => {
+                // units * (display / 10^precision) * haircut >= value_to_cover
+                let pre_haircut = value_to_cover
+                    .checked_div(haircut)
+                    .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
+                match price.amount_from_usd(pre_haircut) {
+                    Ok(amt) => AssetRequirementV1::quoted(asset_id.clone(), Uint128::from(amt)),
+                    // Cheap high-precision asset: required base units do not fit u128.
+                    Err(ContractError::AmountNotRepresentable) => {
+                        AssetRequirementV1::unquotable(asset_id.clone())
+                    }
+                    Err(e) => return Err(QueryError::Contract(e)),
+                }
             }
         };
-        required.push(AssetRequirementV1 {
-            asset_id: asset_id.clone(),
-            amount,
-        });
+        required.push(req);
     }
+
+    let unpriceable_collateral = borrower_collateral_opt
+        .as_ref()
+        .map(|bc| {
+            bc.amounts
+                .keys()
+                .filter(|id| !prices.contains_key(*id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
 
     to_json_binary(&CollateralRequirementsResponseV1 {
         required_collateral_value_usd: required_collateral_value_usd.to_string(),
         additional_collateral_value_usd: value_to_cover.to_string(),
         required,
+        unpriceable_collateral,
     })
     .map_err(QueryError::Std)
 }

@@ -44,6 +44,7 @@ fn contract_state(margin_rate: &str, liquidation_rate: &str) -> ContractStateV1 
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: Some(Addr::unchecked(CUSTODIAN)),
+        max_liquidation_staleness_seconds: 3600,
     }
 }
 
@@ -192,35 +193,15 @@ fn total_collateral_value_one_asset_no_haircut_set_uses_full_value() {
 }
 
 #[test]
-fn total_collateral_value_missing_price_errors() {
+fn total_collateral_value_skips_missing_and_zero() {
     let mut collateral = BorrowerCollateralV1::default();
     collateral.amounts.insert("btc".to_string(), 10u128);
-    let prices = PriceMapResponse::new();
-    let assets = supported_assets(&[("btc", Some("1.0"))]);
-    let err = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap_err();
-    match &err {
-        ContractError::NotFoundError { message } => {
-            assert!(message.contains("Price of asset"));
-        }
-        _ => panic!("expected NotFoundError, got {:?}", err),
-    }
-}
-
-#[test]
-fn total_collateral_value_zero_price_errors() {
-    let mut collateral = BorrowerCollateralV1::default();
-    collateral.amounts.insert("btc".to_string(), 10u128);
+    collateral.amounts.insert("eth".to_string(), 2u128);
     let mut prices = PriceMapResponse::new();
-    prices.insert("btc".to_string(), price_entry("0"));
-    let assets = supported_assets(&[("btc", Some("1.0"))]);
-    let err = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap_err();
-    match &err {
-        ContractError::IllegalArgumentError { message } => {
-            assert!(message.contains("Collateral price is zero"));
-            assert!(message.contains("btc"));
-        }
-        _ => panic!("expected IllegalArgumentError, got {:?}", err),
-    }
+    prices.insert("eth".to_string(), price_entry("0"));
+    let assets = supported_assets(&[("btc", Some("1.0")), ("eth", Some("1.0"))]);
+    let v = calculate_total_collateral_value_usd(&collateral, &prices, &assets).unwrap();
+    assert_eq!(v, Decimal256::zero());
 }
 
 #[test]

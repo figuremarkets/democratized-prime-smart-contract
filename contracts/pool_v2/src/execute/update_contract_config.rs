@@ -9,7 +9,7 @@
 
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_CONTRACT_STATE_JSON};
 use crate::model::error::{illegal_argument, invalid_funds, ContractError};
-use crate::model::BadDebtLossAllocation;
+use crate::model::{BadDebtLossAllocation, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_contract_state_v1};
 use crate::utils::assert_custodian;
 use cosmwasm_std::{ensure, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128};
@@ -32,6 +32,7 @@ pub struct UpdateContractConfigParams {
     pub commit_market_id: Option<u32>,
     pub bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
     pub custodian: Option<String>,
+    pub max_liquidation_staleness_seconds: Option<u64>,
 }
 
 /// Update contract config. Contract custodian only; no funds. Only provided fields are updated.
@@ -58,7 +59,8 @@ pub fn update_contract_config(
         || params.max_borrower_collateral_types.is_some()
         || params.commit_market_id.is_some()
         || params.bad_debt_loss_allocation.is_some()
-        || params.custodian.is_some();
+        || params.custodian.is_some()
+        || params.max_liquidation_staleness_seconds.is_some();
     ensure!(
         has_any,
         illegal_argument("At least one config field must be provided")
@@ -128,6 +130,9 @@ pub fn update_contract_config(
         let new_custodian = deps.api.addr_validate(new_custodian.trim())?;
         contract.custodian = Some(new_custodian);
     }
+    if let Some(v) = params.max_liquidation_staleness_seconds {
+        contract.max_liquidation_staleness_seconds = v;
+    }
 
     ensure!(
         !contract.margin_rate.is_zero(),
@@ -158,6 +163,10 @@ pub fn update_contract_config(
         illegal_argument(
             "liquidation_bonus_rate * margin_rate must be < 1 (otherwise liquidations are impossible)"
         )
+    );
+    ensure!(
+        contract.max_liquidation_staleness_seconds <= MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+        illegal_argument("max_liquidation_staleness_seconds exceeds maximum")
     );
 
     set_contract_state_v1(deps.storage, &contract)?;

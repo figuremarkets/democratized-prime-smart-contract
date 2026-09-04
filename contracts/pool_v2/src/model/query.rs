@@ -12,10 +12,47 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
+/// Per-asset amount in GetCollateralRequirements, GetBorrowerPosition, and GetState.
+/// The shared type is intentional; splitting it would be a breaking API change.
+///
+/// `satisfiable` is whether this row is a usable figure:
+/// - GetCollateralRequirements: `true` if `amount` is a real quote (including 0 additional
+///   needed); `false` if a positive requirement could not be quoted (missing/stale/zero
+///   price, zero haircut, or units that do not fit `u128`). The flag is deliberately coarse:
+///   it does not distinguish a transient down feed from a permanent condition (zero haircut
+///   or unrepresentable units).
+/// - GetBorrowerPosition: `true` if this holding was priced into USD/LTV.
+/// - GetState: always `true` (pool holdings, not a quote).
+///
+/// Defaults to `true` so older JSON that omits the field is treated as a real figure.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct AssetRequirementV1 {
     pub asset_id: String,
     pub amount: Uint128,
+    #[serde(default = "default_true")]
+    pub satisfiable: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl AssetRequirementV1 {
+    pub fn holding(asset_id: impl Into<String>, amount: Uint128, satisfiable: bool) -> Self {
+        Self {
+            asset_id: asset_id.into(),
+            amount,
+            satisfiable,
+        }
+    }
+
+    pub fn quoted(asset_id: impl Into<String>, amount: Uint128) -> Self {
+        Self::holding(asset_id, amount, true)
+    }
+
+    pub fn unquotable(asset_id: impl Into<String>) -> Self {
+        Self::holding(asset_id, Uint128::zero(), false)
+    }
 }
 
 /// Reserve as returned in GetState / GetReserve: stored fields plus derived totals (strings for JSON).
@@ -92,8 +129,14 @@ pub struct BorrowerPositionResponseV1 {
     pub underlying_debt: String,
     pub underlying_debt_display: String,
     pub lending_denom: Denom,
-    /// Collateral amounts per asset (base units).
+    /// Collateral amounts per asset (base units). Held denoms are always listed, including
+    /// those omitted from [`Self::collateral_value_usd`] (`satisfiable` is false on those).
     pub collateral: Vec<AssetRequirementV1>,
+    /// Held collateral denoms omitted from [`Self::collateral_value_usd`] because the stored
+    /// oracle price is missing, zero, or stale. Empty when every held asset was priced.
+    /// Does not affect `health` (that still uses the remaining priced collateral).
+    #[serde(default)]
+    pub unpriceable_collateral: Vec<String>,
     /// Total collateral value in USD (after haircuts). "0" if no collateral or oracle unavailable.
     pub collateral_value_usd: String,
     /// Loan-to-value (debt value / collateral value). "0" if no collateral.
@@ -112,7 +155,15 @@ pub struct CollateralRequirementsResponseV1 {
     /// Additional collateral value in USD the user must add. Equals required total when no borrower; when borrower is set, total minus their existing collateral. Use this to combine assets (any mix whose haircutted value ≥ this).
     pub additional_collateral_value_usd: String,
     /// Per-asset minimum amount. When borrower is set these are *additional* amounts needed; otherwise the amount of each asset that would satisfy the full requirement alone.
+    /// `satisfiable` is false when a positive requirement could not be quoted. The flag is
+    /// deliberately coarse (down feed vs zero haircut vs unrepresentable units).
     pub required: Vec<AssetRequirementV1>,
+    /// Held collateral denoms omitted from the existing-collateral credit that reduces
+    /// [`Self::additional_collateral_value_usd`] because the stored oracle price is missing,
+    /// zero, or stale. Empty when `borrower` is unset or every held asset was priced.
+    /// Those denoms may be absent from [`Self::required`] when they were not requested.
+    #[serde(default)]
+    pub unpriceable_collateral: Vec<String>,
 }
 
 /// Response for the GetLenderStatus query. Supply balance comes from repo_token_cw20 Balance (and TokenInfo) query.

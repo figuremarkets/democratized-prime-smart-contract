@@ -118,6 +118,7 @@ pub fn execute(
             commit_market_id,
             bad_debt_loss_allocation,
             custodian,
+            max_liquidation_staleness_seconds,
         } => update_contract_config(
             deps,
             env,
@@ -133,6 +134,7 @@ pub fn execute(
                 commit_market_id,
                 bad_debt_loss_allocation,
                 custodian,
+                max_liquidation_staleness_seconds,
             },
         ),
         ExecuteMsg::UpdateRateParams { rate_params } => {

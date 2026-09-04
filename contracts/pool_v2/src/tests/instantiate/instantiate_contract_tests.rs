@@ -7,7 +7,9 @@ use crate::constants::{
 };
 use crate::instantiate::{instantiate_contract, reply};
 use crate::model::error::ContractError;
-use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
+use crate::model::{
+    CollateralAssetV1, Denom, RateParamsV1, MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS,
+};
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
 use crate::tests::instantiate_helpers::{mock_repo_token_instantiate_reply, CUSTODIAN};
@@ -46,6 +48,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         borrower_required_attrs: vec!["borrower.kyc".to_string()],
         price_oracle_address: ORACLE.to_string(),
         max_borrower_collateral_types: 5,
+        max_liquidation_staleness_seconds: 3600,
         margin_rate: Decimal256::from_str("0.80").unwrap(),
         liquidation_rate: Decimal256::from_str("0.90").unwrap(),
         liquidation_bonus_rate: Decimal256::from_ratio(102u128, 100u128), // 2%
@@ -617,6 +620,29 @@ fn instantiate_fails_max_borrower_collateral_types_zero() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(message.contains("max_borrower_collateral_types must be at least 1"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn instantiate_fails_max_liquidation_staleness_exceeds_maximum() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.max_liquidation_staleness_seconds = MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS + 1;
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("max_liquidation_staleness_seconds exceeds maximum"));
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }

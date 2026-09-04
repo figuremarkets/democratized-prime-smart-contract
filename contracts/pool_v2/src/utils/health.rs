@@ -3,6 +3,9 @@
 //! USD notionals use the oracle's `display_price_usd` and `precision`:
 //! `display_price_usd × amount / 10^precision`. Collateral then applies haircut.
 //! Do not multiply the deprecated scaled `price_usd` field by amount.
+//!
+//! Missing or zero collateral prices contribute $0 so a dead feed does not freeze the
+//! position. The lending denom still requires a usable price.
 
 use crate::model::collateral::BorrowerCollateralV1;
 use crate::model::collateral::CollateralAssetV1;
@@ -68,6 +71,8 @@ pub fn calculate_ltv(
         return Decimal256::zero().to_ok();
     }
     if total_collateral_value_usd.is_zero() {
+        // TODO(sc-542885): return Decimal256::one() so an all-unpriceable bag with debt is
+        // Liquidatable (needed by write_off). Borrow/RemoveCollateral fail closed either way.
         return illegal_argument(format!(
             "No collateral for loans [debt value {}]",
             borrow_balance_usd
@@ -80,6 +85,7 @@ pub fn calculate_ltv(
         .map_err(ContractError::from)
 }
 
+/// Haircutted collateral USD. Missing or zero prices are skipped (no LTV credit).
 pub fn calculate_total_collateral_value_usd(
     collateral: &BorrowerCollateralV1,
     prices: &PriceMapResponse,
@@ -87,14 +93,13 @@ pub fn calculate_total_collateral_value_usd(
 ) -> Result<Decimal256, ContractError> {
     let mut total = Decimal256::zero();
     for (asset_id, amount) in collateral.amounts.iter() {
-        let price = prices
-            .get(asset_id)
-            .ok_or_else(|| not_found(format!("Price of asset: {}", asset_id)))?;
+        let Some(price) = prices.get(asset_id) else {
+            continue;
+        };
+        if price.is_zero_price() {
+            continue;
+        }
         let haircut = haircut_percentage(supported_assets, asset_id);
-        ensure!(
-            !price.is_zero_price(),
-            illegal_argument(format!("Collateral price is zero: {asset_id}"))
-        );
         let value = price
             .value_usd(*amount)?
             .checked_mul(haircut)

@@ -15,10 +15,14 @@ pub enum QueryMsg {
     /// Current reserve state (indexes, totals, utilization) plus live APRs (see `ReserveResponseV1`).
     #[returns(ReserveResponseV1)]
     GetReserve {},
-    /// Borrower position: debt, collateral amounts, collateral value (USD), LTV, and health.
+    /// Borrower position: debt, collateral amounts, collateral value (USD), LTV, health, and
+    /// held denoms omitted from that USD total (`unpriceable_collateral`).
     #[returns(BorrowerPositionResponseV1)]
     GetBorrowerPosition { address: String },
-    /// Collateral required for a given loan amount (for UI).
+    /// Collateral required for a given loan amount (for UI). Per-asset `required` entries
+    /// include `satisfiable` so amount 0 is not confused with an unquotable feed. When
+    /// `borrower` is set, held denoms omitted from existing-collateral credit are named in
+    /// `unpriceable_collateral`.
     #[returns(CollateralRequirementsResponseV1)]
     GetCollateralRequirements {
         borrower: Option<String>,
