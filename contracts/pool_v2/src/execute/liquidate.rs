@@ -2,7 +2,12 @@
 //!
 //! Liquidates a borrower whose LTV is at or above the liquidation rate. Auth follows
 //! [`crate::model::LiquidationAccess`]: owner-only by default, or any sender when the
-//! custodian has set **permissionless**. The liquidator repays debt and chooses which
+//! custodian has set **permissionless** and the position is liquidatable even after
+//! counting unpriceable holdings at their retained last-known (too-old, non-zero) quotes.
+//! A dropped feed with **no** stored quote, or a last-known that would pull LTV back
+//! below the liquidation rate, still requires the owner — so a stranger cannot seize
+//! the priced remainder of a solvent mixed bag. Dust of a dead feed does not move LTV
+//! and does not disable permissionless. The liquidator repays debt and chooses which
 //! collateral to seize. The **market value**
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
@@ -16,9 +21,10 @@
 //! so liquidations are not frozen by a paused feed. The lending denom must have a stored price
 //! within the same bound.
 //!
-//! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → liquidatable →
-//! minimum repay (USD → lending units) → sent funds and scaled repay → per-asset checks and
-//! dry-run post-seizure → value band (100% floor waived on full close) → persist reserve and
+//! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
+//! liquidatable → mixed-bag owner gate (load-bearing unpriceable only) → minimum repay
+//! (USD → lending units) → sent funds and scaled repay → per-asset checks and dry-run
+//! post-seizure → value band (100% floor waived on full close) → persist reserve and
 //! collateral → response (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
@@ -33,7 +39,7 @@ use crate::constants::{
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
 use crate::model::BorrowerCollateralV1;
-use crate::model::{BadDebtLossAllocation, LiquidationAccess};
+use crate::model::{BadDebtLossAllocation, ContractStateV1, LiquidationAccess};
 use crate::storage::{
     get_borrower_collateral, get_contract_state_v1, get_scaled_borrow, set_borrower_collateral,
     set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
@@ -42,7 +48,7 @@ use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_borrow_value_usd,
     calculate_total_collateral_value_usd, get_asset_prices_for_liquidation, get_borrower_health,
     scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
-    validate_single_coin_denom, WithRates,
+    validate_single_coin_denom, LiquidationPrices, WithRates,
 };
 use cosmwasm_std::{
     ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
@@ -52,8 +58,13 @@ use std::collections::{BTreeMap, HashSet};
 
 pub const ACTION: &str = "liquidate";
 pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may liquidate";
+pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
+    "Only the contract owner may liquidate when unpriceable collateral is load-bearing";
 
 /// Liquidate a borrower whose LTV ≥ liquidation_rate. Auth follows [`LiquidationAccess`].
+/// Permissionless still requires the owner when unpriceable collateral is load-bearing
+/// (counting last-known of dropped feeds would make the position not liquidatable, or a
+/// dropped feed has no stored quote).
 /// Repay debt from funds and seize collateral per `collateral_to_seize`; market value must be
 /// 100%–liquidation_bonus_rate of repay, except a full close waives the 100% floor (bonus cap
 /// still applies). See module doc for flow.
@@ -67,11 +78,8 @@ pub fn liquidate(
     let contract = get_contract_state_v1(deps.storage)?;
 
     // ---------- 1. Auth and borrower identity ----------
-    match contract.liquidation_access {
-        LiquidationAccess::OwnerOnly => {
-            assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
-        }
-        LiquidationAccess::Permissionless => {}
+    if matches!(contract.liquidation_access, LiquidationAccess::OwnerOnly) {
+        assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
     }
     let borrower_addr = deps.api.addr_validate(borrower.trim())?;
     let borrower_key = borrower_addr.as_str();
@@ -106,8 +114,8 @@ pub fn liquidate(
     let asset_prices = &quoted.prices;
     let has_priceable_collateral = borrower_collateral
         .amounts
-        .keys()
-        .any(|id| !quoted.unpriceable.contains(id));
+        .iter()
+        .any(|(id, amt)| *amt > 0 && !quoted.unpriceable.contains(id));
     ensure!(
         has_priceable_collateral,
         illegal_argument(
@@ -125,6 +133,16 @@ pub fn liquidate(
         health == BorrowerHealthV1::Liquidatable,
         illegal_argument("Borrower is not liquidatable (LTV below liquidation rate)")
     );
+    // Unpriceable holdings are omitted from the acted-on USD, which inflates LTV. Require
+    // the owner when counting retained last-knowns would make the position not liquidatable
+    // (or a dropped feed has no stored quote). Dust of a dead feed does not trip this.
+    if matches!(
+        contract.liquidation_access,
+        LiquidationAccess::Permissionless
+    ) && unpriceable_is_load_bearing(&contract, &quoted, &borrower_collateral, debt_underlying)?
+    {
+        assert_owner(deps.storage, &info.sender, ASSERT_OWNER_UNPRICEABLE_ERR)?;
+    }
 
     // ---------- 4. Minimum repay (USD): healthy target or collateral cap; then lending base units ----------
     // Target healthy LTV: after repay r and seizing bonus*r of collateral, (D - r) / (C - bonus*r) = margin_rate.
@@ -427,4 +445,33 @@ pub fn liquidate(
     }
 
     res.attach_rates(&reserve, &contract.rate_params)
+}
+
+/// True when omitting unpriceable holdings is what made the position look liquidatable.
+/// Retained last-known quotes are an auth input only — never the acted-on health or seizure
+/// band. A missing or zero stored quote cannot be counted, so that holding is treated as load-bearing.
+fn unpriceable_is_load_bearing(
+    contract: &ContractStateV1,
+    quoted: &LiquidationPrices,
+    collateral: &BorrowerCollateralV1,
+    debt_underlying: u128,
+) -> Result<bool, ContractError> {
+    if quoted.unpriceable.is_empty() {
+        return Ok(false);
+    }
+    let missing_last_known = quoted.unpriceable.iter().any(|id| {
+        collateral.amounts.get(id).copied().unwrap_or(0) > 0
+            && !quoted.unpriceable_last_known.contains_key(id)
+    });
+    if missing_last_known {
+        return Ok(true);
+    }
+    let (health, _) = get_borrower_health(
+        contract,
+        &contract.supported_collateral_assets,
+        &quoted.prices_with_unpriceable_last_known(),
+        collateral,
+        Uint128::from(debt_underlying),
+    )?;
+    Ok(health != BorrowerHealthV1::Liquidatable)
 }

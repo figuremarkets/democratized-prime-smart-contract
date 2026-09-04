@@ -68,7 +68,7 @@
       "$ref": "#/definitions/Denom"
     },
     "liquidation_access": {
-      "description": "Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`].",
+      "description": "Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`]. Unpriceable collateral that is load-bearing still requires the owner.",
       "default": "owner_only",
       "allOf": [
         {
@@ -221,7 +221,7 @@
       ]
     },
     "LiquidationAccess": {
-      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Paused still blocks Liquidate for everyone.",
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",
       "oneOf": [
         {
           "description": "Only the cw-ownable owner may liquidate (current production posture).",
@@ -231,7 +231,7 @@
           ]
         },
         {
-          "description": "Any address may liquidate a liquidatable borrower.",
+          "description": "Any address may liquidate a fully-quoted liquidatable borrower. Unpriceable collateral that is load-bearing still requires the owner.",
           "type": "string",
           "enum": [
             "permissionless"

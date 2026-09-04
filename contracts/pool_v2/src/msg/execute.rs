@@ -65,6 +65,7 @@ pub enum ExecuteMsg {
     },
 
     /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
+    /// Permissionless still requires the owner when unpriceable collateral is load-bearing.
     /// Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt),
     /// excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the
     /// amount repaid, except a full close waives the 100% floor.
@@ -129,7 +130,8 @@ pub enum ExecuteMsg {
         max_liquidation_staleness_seconds: Option<u64>,
         /// Who may call Liquidate. Omitted / JSON `null` = no change. Permissionless requires
         /// last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`],
-        /// immediate haircut, and `deficit_underlying == 0`.
+        /// immediate haircut, and `deficit_underlying == 0`. Unpriceable collateral that is
+        /// load-bearing still requires the owner.
         #[serde(default)]
         liquidation_access: Option<LiquidationAccess>,
     },

@@ -88,14 +88,18 @@ pub enum BadDebtLossAllocation {
 /// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only.
 /// [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`],
 /// [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0`
-/// (see [`ensure_permissionless_config`]). Paused still blocks Liquidate for everyone.
+/// (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing
+/// (counting last-known of dropped feeds would make the position not liquidatable, or a
+/// dropped feed has no stored quote) still requires the owner. Paused still
+/// blocks Liquidate for everyone.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LiquidationAccess {
     /// Only the cw-ownable owner may liquidate (current production posture).
     #[default]
     OwnerOnly,
-    /// Any address may liquidate a liquidatable borrower.
+    /// Any address may liquidate a fully-quoted liquidatable borrower.
+    /// Unpriceable collateral that is load-bearing still requires the owner.
     Permissionless,
 }
 

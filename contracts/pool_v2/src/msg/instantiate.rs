@@ -71,7 +71,8 @@ pub struct InstantiateMsg {
     pub max_liquidation_staleness_seconds: u64,
     /// Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known
     /// ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and
-    /// [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`].
+    /// [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`]. Unpriceable
+    /// collateral that is load-bearing still requires the owner.
     #[serde(default)]
     pub liquidation_access: LiquidationAccess,
 }

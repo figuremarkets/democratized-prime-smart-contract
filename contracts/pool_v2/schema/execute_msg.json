@@ -103,7 +103,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.",
+      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Permissionless still requires the owner when unpriceable collateral is load-bearing. Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.",
       "type": "object",
       "required": [
         "liquidate"
@@ -341,7 +341,7 @@
               ]
             },
             "liquidation_access": {
-              "description": "Who may call Liquidate. Omitted / JSON `null` = no change. Permissionless requires last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], immediate haircut, and `deficit_underlying == 0`.",
+              "description": "Who may call Liquidate. Omitted / JSON `null` = no change. Permissionless requires last-known ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], immediate haircut, and `deficit_underlying == 0`. Unpriceable collateral that is load-bearing still requires the owner.",
               "default": null,
               "anyOf": [
                 {
@@ -777,7 +777,7 @@
       ]
     },
     "LiquidationAccess": {
-      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Paused still blocks Liquidate for everyone.",
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",
       "oneOf": [
         {
           "description": "Only the cw-ownable owner may liquidate (current production posture).",
@@ -787,7 +787,7 @@
           ]
         },
         {
-          "description": "Any address may liquidate a liquidatable borrower.",
+          "description": "Any address may liquidate a fully-quoted liquidatable borrower. Unpriceable collateral that is load-bearing still requires the owner.",
           "type": "string",
           "enum": [
             "permissionless"

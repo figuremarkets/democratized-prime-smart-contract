@@ -256,6 +256,7 @@ fn get_asset_prices_for_liquidation_marks_missing_collateral_unpriceable() {
     );
     assert!(!result.prices.contains_key("asset.two"));
     assert!(result.unpriceable.contains("asset.two"));
+    assert!(!result.unpriceable_last_known.contains_key("asset.two"));
 }
 
 #[test]
@@ -294,6 +295,10 @@ fn get_asset_prices_for_liquidation_marks_zero_price_collateral_unpriceable() {
     assert!(result.prices.contains_key("asset.one"));
     assert!(!result.prices.contains_key("asset.two"));
     assert!(result.unpriceable.contains("asset.two"));
+    assert!(
+        !result.unpriceable_last_known.contains_key("asset.two"),
+        "a zero quote is as uninformative as a missing one"
+    );
 }
 
 #[test]
@@ -370,6 +375,55 @@ fn get_asset_prices_for_liquidation_marks_beyond_bound_collateral_unpriceable() 
     assert!(result.prices.contains_key("asset.one"));
     assert!(!result.prices.contains_key("asset.two"));
     assert!(result.unpriceable.contains("asset.two"));
+    assert_eq!(
+        result
+            .unpriceable_last_known
+            .get("asset.two")
+            .unwrap()
+            .display_price_usd,
+        Decimal256::one()
+    );
+}
+
+#[test]
+fn get_asset_prices_for_liquidation_ignores_zero_amount_unpriceable_holdings() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1u128);
+    amounts.insert("asset.two".to_string(), 0u128);
+    let collateral = BorrowerCollateralV1 { amounts };
+    set_borrower_collateral(deps.as_mut().storage, SOME_USER, &collateral).unwrap();
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.two".to_string(),
+        oracle_price_expired_for(
+            Decimal256::one(),
+            env.block.time,
+            DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+        ),
+    );
+    mock_price_oracle(&mut deps, prices);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let result = get_asset_prices_for_liquidation(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral,
+    )
+    .unwrap();
+
+    assert!(result.unpriceable.is_empty());
+    assert!(result.unpriceable_last_known.is_empty());
 }
 
 #[test]
