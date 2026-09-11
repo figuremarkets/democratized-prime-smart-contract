@@ -13,19 +13,38 @@
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
 //! A **full close** (post-seizure collateral map empty) waives only the 100% floor; the bonus
-//! cap still applies, so a 1-atom repay can empty only a dust bag. Residual debt is booked in
+//! cap still applies, so a 1-atom repay can empty only a dust bag. Residual debt against an
+//! empty map **or** a remainder with no haircutted USD (unpriceable leftover) is booked in
 //! the same transaction via `bad_debt_loss_allocation`.
+//!
+//! **How much must be repaid:** there is no closed-form minimum. The repay plus seizure must
+//! leave the borrower at or below `margin_rate`, which is checked against the real post-state
+//! (`new_amounts` and `new_scaled_debt`) rather than predicted up front. Full repayment, a
+//! full close, and a remainder whose haircutted USD is zero (unpriceable leftover, or
+//! priceable leftover that truncates to $0) are exempt from that health check — residual
+//! debt against a zero-value bag is booked as bad debt in the same tx. Only a non-zero
+//! attached amount is required at the funds check.
+//!
+//! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
+//! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
+//! its *market* (un-haircutted) value, so a $1 repay only removes `haircut * bonus * $1` of
+//! health-relevant collateral, not `bonus * $1`. That overstated the requirement by roughly
+//! `1/haircut` and forced over-liquidation: the borrower could not be brought to exactly
+//! `margin_rate`, only far past it. No corrected closed form exists either, because the
+//! liquidator picks which assets to seize and haircuts are per-asset. Step 7b validates the
+//! real post-state instead.
+//!
 //! Collateral with **no stored** oracle price, a **zero** stored price, or last-known older than
-//! `max_liquidation_staleness_seconds`, is valued at zero for LTV/min-repay and cannot
+//! `max_liquidation_staleness_seconds`, is valued at zero for LTV and cannot
 //! be seized. A **stale** stored price still within that bound is used as last-known (not fatal)
 //! so liquidations are not frozen by a paused feed. The lending denom must have a stored price
 //! within the same bound.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
-//! liquidatable → mixed-bag owner gate (load-bearing unpriceable only) → minimum repay
-//! (USD → lending units) → sent funds and scaled repay → per-asset checks and dry-run
-//! post-seizure → value band (100% floor waived on full close) → persist reserve and
-//! collateral → response (collateral send + attrs) → refund excess lending.
+//! liquidatable → mixed-bag owner gate (load-bearing unpriceable only) → lending price →
+//! sent funds and scaled repay → per-asset checks and dry-run post-seizure → value band
+//! (100% floor waived on full close) → post-state health → persist reserve and collateral →
+//! response (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
 //! vs **immediate** (pro-rata `liquidity_index` haircut in the same tx; see `apply_pro_rata_liquidity_index_haircut`).
@@ -45,8 +64,8 @@ use crate::storage::{
     set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
 };
 use crate::utils::{
-    apply_pro_rata_liquidity_index_haircut, calculate_borrow_value_usd,
-    calculate_total_collateral_value_usd, get_asset_prices_for_liquidation, get_borrower_health,
+    apply_pro_rata_liquidity_index_haircut, calculate_total_collateral_value_usd,
+    format_as_percent_string, get_asset_prices_for_liquidation, get_borrower_health,
     scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
     validate_single_coin_denom, LiquidationPrices, WithRates,
 };
@@ -67,7 +86,9 @@ pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
 /// dropped feed has no stored quote).
 /// Repay debt from funds and seize collateral per `collateral_to_seize`; market value must be
 /// 100%–liquidation_bonus_rate of repay, except a full close waives the 100% floor (bonus cap
-/// still applies). See module doc for flow.
+/// still applies). The resulting post-state must be at or below `margin_rate` — there is no
+/// precomputed minimum repay. Residual debt against an empty or zero-value remainder is booked
+/// as bad debt. See module doc for flow.
 pub fn liquidate(
     deps: DepsMut,
     env: Env,
@@ -144,64 +165,7 @@ pub fn liquidate(
         assert_owner(deps.storage, &info.sender, ASSERT_OWNER_UNPRICEABLE_ERR)?;
     }
 
-    // ---------- 4. Minimum repay (USD): healthy target or collateral cap; then lending base units ----------
-    // Target healthy LTV: after repay r and seizing bonus*r of collateral, (D - r) / (C - bonus*r) = margin_rate.
-    // Solving: r = (D - margin_rate*C) / (1 - bonus*margin_rate). Cap at debt, at zero, and at total collateral USD.
-    let debt_value_usd = calculate_borrow_value_usd(
-        Uint128::from(debt_underlying),
-        &contract.lending_denom.name,
-        asset_prices,
-    )?;
-    let collateral_value_usd = calculate_total_collateral_value_usd(
-        &borrower_collateral,
-        asset_prices,
-        &contract.supported_collateral_assets,
-    )?;
-
-    let one = Decimal256::one();
-    let bonus = contract.liquidation_bonus_rate;
-    let bonus_times_margin = bonus
-        .checked_mul(contract.margin_rate)
-        .map_err(|_| illegal_state("liquidation_bonus_rate * margin_rate overflow"))?;
-    ensure!(
-        bonus_times_margin < one,
-        illegal_state(
-            "Liquidation impossible: liquidation_bonus_rate * margin_rate must be < 1 \
-             (current config would make denominator 1 - bonus*margin_rate non-positive)"
-        )
-    );
-    let denominator = one.checked_sub(bonus_times_margin).map_err(|_| {
-        illegal_state(
-            "Liquidation denominator underflow (1 - liquidation_bonus_rate*margin_rate); \
-             config invalid",
-        )
-    })?;
-    ensure!(
-        !denominator.is_zero(),
-        illegal_state("Liquidation denominator zero (1 - liquidation_bonus_rate*margin_rate)")
-    );
-    // Within step 4: numerator = debt - margin*C. With LTV >= liquidation_rate, exact math gives numerator >= 0.
-    // Decimal256 rounding can make margin*C >= debt; saturating_sub yields 0 so we don't revert.
-    let numerator =
-        debt_value_usd.saturating_sub(contract.margin_rate.checked_mul(collateral_value_usd)?);
-    let min_repay_value_to_healthy_usd = numerator.checked_div(denominator)?;
-    // Clamp: min_repay must be in [0, debt_value_usd] (no negative, can't require more than full debt).
-    let min_repay_value_to_healthy_usd = if min_repay_value_to_healthy_usd <= Decimal256::zero() {
-        Decimal256::zero()
-    } else if min_repay_value_to_healthy_usd > debt_value_usd {
-        debt_value_usd
-    } else {
-        min_repay_value_to_healthy_usd
-    };
-
-    // If total collateral is less than the repay needed to reach healthy, cap min repay at collateral
-    // value so we can still partially liquidate (take all collateral, repay up to that value).
-    let min_repay_value_usd = if min_repay_value_to_healthy_usd > collateral_value_usd {
-        collateral_value_usd
-    } else {
-        min_repay_value_to_healthy_usd
-    };
-
+    // ---------- 4. Lending denom price (repay valuation for the seizure band) ----------
     let price_lending = asset_prices
         .get(&contract.lending_denom.name)
         .ok_or_else(|| {
@@ -214,18 +178,11 @@ pub fn liquidate(
         !price_lending.is_zero_price(),
         illegal_state("Lending denom price is zero")
     );
-    // Still step 4: guard above avoids divide-by-zero in amount_from_usd.
-    let min_repay_lending = price_lending.amount_from_usd(min_repay_value_usd)?;
-    // Clamp min repay to at least 1 base unit (min_repay_value_usd can be 0 when numerator saturates;
-    // amount_from_usd(0) returns 0).
-    let min_repay_lending = min_repay_lending.max(1);
+    let bonus = contract.liquidation_bonus_rate;
 
     // ---------- 5. Attached lending funds; actual repay and scaled repay ----------
-    let sent = validate_single_coin_denom(
-        &info,
-        &contract.lending_denom,
-        Uint128::from(min_repay_lending),
-    )?;
+    // Only a non-zero amount is required; how much is *enough* is decided by post-state health.
+    let sent = validate_single_coin_denom(&info, &contract.lending_denom, Uint128::one())?;
     let sent_u128 = sent.u128();
     let actual_repay_underlying = sent_u128.min(debt_underlying);
     // Full repay: use scaled_debt directly to avoid double-floor dust (same as repay.rs).
@@ -318,7 +275,10 @@ pub fn liquidate(
             new_amounts.remove(asset_id);
         }
     }
-    let is_full_close = new_amounts.is_empty();
+    let post_collateral = BorrowerCollateralV1 {
+        amounts: new_amounts,
+    };
+    let is_full_close = post_collateral.amounts.is_empty();
 
     // ---------- 7. USD band vs repay (100% floor waived on full close); bad-debt flag ----------
     ensure!(
@@ -337,7 +297,49 @@ pub fn liquidate(
         ))
     );
 
-    let bad_debt = is_full_close && new_scaled_debt > 0;
+    // ---------- 7b. Post-state health: the seizure must actually restore the position ----------
+    // Replaces the old closed-form minimum repay (see module doc). Checking the real post-state
+    // is haircut-correct by construction, so a liquidator can now bring the borrower to exactly
+    // margin_rate, and it handles multi-asset seizures whose haircuts differ. Exempt: a full
+    // close (no collateral left to be healthy about), a full repayment (no debt left), and a
+    // remainder whose haircutted USD is zero. `calculate_ltv` returns the sentinel 1 on a
+    // zero-value bag, which would classify Liquidatable and strand the position — unpriceable
+    // leftover cannot be seized, and a haircut that truncates remaining units to $0 contributes
+    // nothing to LTV. Residual debt against that bag is booked as bad debt below (same as a
+    // full close), so it does not sit on the books unallocated. Not exploitable: the band still
+    // charges ~full market value for the priced collateral that is taken.
+    let post_collateral_value_usd = calculate_total_collateral_value_usd(
+        &post_collateral,
+        asset_prices,
+        &contract.supported_collateral_assets,
+    )?;
+    if !is_full_close && new_scaled_debt > 0 && !post_collateral_value_usd.is_zero() {
+        let post_debt_underlying =
+            scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?;
+        let (post_health, post_ltv) = get_borrower_health(
+            &contract,
+            &contract.supported_collateral_assets,
+            asset_prices,
+            &post_collateral,
+            Uint128::from(post_debt_underlying),
+        )?;
+        ensure!(
+            post_health == BorrowerHealthV1::Healthy,
+            illegal_argument(format!(
+                "Liquidation would leave the borrower at LTV {} ({:?}), above margin_rate \
+                 {}: repay more, or seize more collateral within the bonus cap \
+                 (a seizure that empties the borrower collateral map is exempt)",
+                format_as_percent_string(post_ltv)?,
+                post_health,
+                format_as_percent_string(contract.margin_rate)?
+            ))
+        );
+    }
+
+    // Empty map or remaining collateral with no haircutted USD: leftover scaled debt is a
+    // loss to book, not a live borrow. `is_full_close` is the usual case; a mixed bag that
+    // clears every priceable unit (or a remainder that haircuts to $0) hits the same path.
+    let bad_debt = new_scaled_debt > 0 && post_collateral_value_usd.is_zero();
     let bad_debt_underlying_amt = if bad_debt {
         scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?
     } else {
@@ -384,13 +386,7 @@ pub fn liquidate(
             amount: Uint128::from(*seize_amt),
         });
     }
-    set_borrower_collateral(
-        deps.storage,
-        borrower_key,
-        &BorrowerCollateralV1 {
-            amounts: new_amounts,
-        },
-    )?;
+    set_borrower_collateral(deps.storage, borrower_key, &post_collateral)?;
 
     let collateral_json: BTreeMap<String, String> = send_coins
         .iter()

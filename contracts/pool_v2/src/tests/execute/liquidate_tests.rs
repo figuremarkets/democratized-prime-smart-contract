@@ -1,6 +1,7 @@
 //! Tests for Liquidate execute: auth follows liquidation_access (default owner-only;
 //! permissionless still requires the owner when unpriceable collateral is load-bearing),
-//! borrower must be liquidatable, minimum repay to reach healthy LTV, 2% collateral bonus.
+//! borrower must be liquidatable, the post-state must land at or below margin_rate (no
+//! precomputed minimum repay), 2% collateral bonus.
 
 use crate::constants::{
     ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS,
@@ -39,9 +40,12 @@ use provwasm_mocks::mock_provenance_dependencies;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
-/// With debt 600 and collateral price 0.83 (haircutted value 664), min repay = 374 (formula: (D - margin*C)/(1 - bonus*margin)).
-/// Seized collateral is valued at market (display_price_usd × amount / 10^precision). Band [100%, 102%] of repay → for repay 374 need market value in [374, 381.48];
-/// at price 0.83 that is ~451–460 units. Use 455 (market value 377.65).
+/// Pairs with a repay of 374, the amount the old closed-form minimum demanded. It is no longer a
+/// floor (see `liquidate_to_margin_rate_succeeds_without_over_liquidating`), but it is still a
+/// valid repay, so the many tests below that assert on auth, prices, or the band keep using it.
+/// Seized collateral is valued at market (display_price_usd × amount / 10^precision). Band
+/// [100%, 102%] of repay → for repay 374 need market value in [374, 381.48]; at price 0.83 that
+/// is ~451–460 units. Use 455 (market value 377.65; post-state LTV 62.45%, healthy).
 fn collateral_to_seize_success() -> BTreeMap<String, Uint128> {
     let mut m = BTreeMap::new();
     m.insert(COLLATERAL_DENOM.to_string(), Uint128::new(455));
@@ -256,7 +260,8 @@ fn setup_liquidatable_borrower() -> (
 }
 
 /// Priced dust: 1000 units crash to $0.0005 ($0.50 market, below one lending atom at $1).
-/// Debt 700 remains. min_repay clamps to 1; full close with repay 1 books residual 699.
+/// Debt 700 remains. A full close is exempt from the 100% floor and from post-state health, so a
+/// repay of 1 can empty the bag; residual 699 is booked as bad debt.
 fn setup_priced_dust_borrower(
     allocation: BadDebtLossAllocation,
 ) -> (
@@ -315,7 +320,7 @@ fn setup_priced_dust_borrower(
 #[test]
 fn liquidate_non_owner_fails() {
     let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
-    let min_repay = 374u128; // min to bring LTV to healthy (debt 600, collateral value 664, price 0.83)
+    let min_repay = 374u128; // an ample repay; auth is what rejects here
 
     let err = execute(
         deps.as_mut(),
@@ -1001,9 +1006,16 @@ fn liquidate_healthy_borrower_fails() {
     }
 }
 
+/// A repay too small to restore health is rejected by the post-state check, not by a
+/// precomputed floor. Repay 100 with a band-legal seizure of 121 units (121 × 0.83 = $100.43,
+/// inside [100, 102]) leaves debt 500 against 879 units → 879 × 0.83 × 0.8 = $583.66,
+/// LTV 85.67%: above margin_rate 80%, below liquidation_rate 90% (Unhealthy).
 #[test]
-fn liquidate_below_min_repay_fails() {
+fn liquidate_repay_too_small_to_restore_health_fails() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();
+
+    let mut to_seize = BTreeMap::new();
+    to_seize.insert(COLLATERAL_DENOM.to_string(), Uint128::new(121));
 
     let err = execute(
         deps.as_mut(),
@@ -1011,7 +1023,7 @@ fn liquidate_below_min_repay_fails() {
         message_info(&Addr::unchecked(OWNER), &[coin(100, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
-            collateral_to_seize: collateral_to_seize_success(),
+            collateral_to_seize: to_seize,
         },
     )
     .unwrap_err();
@@ -1019,18 +1031,95 @@ fn liquidate_below_min_repay_fails() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(
-                message.contains("below minimum") || message.contains("bring LTV to healthy"),
-                "message: {}",
+                message.contains("above margin_rate"),
+                "expected post-state health rejection, got: {}",
                 message
             );
             assert!(
-                message.contains("374"),
-                "message should mention required minimum 374, got: {}",
+                message.contains("Unhealthy"),
+                "message should report the post-state health, got: {}",
                 message
             );
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
+}
+
+/// Liquidating **to** margin_rate must be possible. An earlier closed-form
+/// minimum subtracted the seizure's market value from a haircutted collateral base and demanded
+/// 374 — nearly double what is needed — so 80% LTV was unreachable and every liquidation
+/// overshot to ~62%.
+///
+/// Repay 198, seize 243 units (243 × 0.83 = $201.69, inside the band [198, 201.96]):
+/// debt 402 against 757 units → 757 × 0.83 × 0.8 = $502.65, LTV 79.98% — just inside margin.
+#[test]
+fn liquidate_to_margin_rate_succeeds_without_over_liquidating() {
+    let (mut deps, env, _debt, collateral_amount) = setup_liquidatable_borrower();
+
+    let repay_amount = 198u128;
+    let seize_units = 243u128;
+    let mut to_seize = BTreeMap::new();
+    to_seize.insert(COLLATERAL_DENOM.to_string(), Uint128::new(seize_units));
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(OWNER),
+            &[coin(repay_amount, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: to_seize,
+        },
+    )
+    .expect("liquidating to exactly margin_rate must be allowed");
+
+    assert_eq!(res.attributes[3].value, repay_amount.to_string());
+
+    // The borrower keeps the collateral the old formula would have taken.
+    let collateral_after = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(
+        collateral_after.amounts.get(COLLATERAL_DENOM),
+        Some(&(collateral_amount - seize_units))
+    );
+
+    // Post-state LTV must land in the healthy band and close to margin_rate, not far past it.
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_after = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let debt_after = scaled_to_underlying_borrow(scaled_after, reserve.borrow_index).unwrap();
+    let asset_prices = get_asset_prices_for_borrower(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral_after,
+    )
+    .unwrap();
+    let (health, ltv) = get_borrower_health(
+        &contract,
+        &contract.supported_collateral_assets,
+        &asset_prices,
+        &collateral_after,
+        Uint128::from(debt_after),
+    )
+    .unwrap();
+    assert_eq!(health, BorrowerHealthV1::Healthy);
+    assert!(
+        ltv <= contract.margin_rate,
+        "LTV {} must be at or below margin_rate {}",
+        ltv,
+        contract.margin_rate
+    );
+    assert!(
+        ltv > Decimal256::from_str("0.79").unwrap(),
+        "LTV {} should land just under margin_rate, not far past it (over-liquidation)",
+        ltv
+    );
+    assert_reserve_assets_liabilities_tie_out(deps.as_ref().storage, "after minimal liquidate")
+        .unwrap();
 }
 
 #[test]
@@ -1355,8 +1444,8 @@ fn liquidate_no_funds_fails() {
     }
 }
 
-/// When min_repay_lending would round to 0 (e.g. min_repay_value_usd from formula is 0), we clamp to 1.
-/// Repay amount 0 must be rejected (below minimum required 1).
+/// Liquidation requires a non-zero attached amount (how much is *enough* is decided by
+/// post-state health, but zero is never enough). Repay amount 0 must be rejected.
 #[test]
 fn liquidate_repay_amount_zero_fails() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();
@@ -1502,6 +1591,318 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
     }
 }
 
+/// Same underwater bag as `liquidate_bad_debt_books_deficit_and_clears_scaled_borrow`, plus a
+/// 1-unit unpriceable leftover that cannot be seized. Clearing the priced side leaves residual
+/// debt against a zero-value remainder — that debt must be booked as bad debt, not left live.
+#[test]
+fn liquidate_zero_value_remainder_books_bad_debt() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    let mut msg = instantiate_msg_full_haircut_collateral();
+    msg.supported_collateral_assets.push(CollateralAssetV1 {
+        asset_id: UNRELIABLE_COLLATERAL.to_string(),
+        haircut: None,
+    });
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add priced collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.65"));
+    prices.remove(UNRELIABLE_COLLATERAL);
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(650, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("priced-side close with unpriceable leftover books bad debt");
+
+    let bad_debt = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+        .expect("bad_debt_underlying attribute");
+    assert_eq!(bad_debt.value, "50");
+    let deficit_attr = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_DEFICIT_UNDERLYING)
+        .expect("deficit_underlying attribute");
+    assert_eq!(deficit_attr.value, "50");
+
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    assert!(!leftover.amounts.contains_key(COLLATERAL_DENOM));
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, 50);
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after zero-value remainder bad-debt liquidate",
+    )
+    .unwrap();
+}
+
+/// The other way a remainder reaches $0: **priceable** and still worth nothing. Covers the same
+/// `post_collateral_value_usd.is_zero()` branch as `liquidate_zero_value_remainder_books_bad_debt`
+/// from the opposite side — a live feed rather than a dead one — so the write-off is not
+/// accidentally coupled to unpriceability.
+///
+/// 250 whole 18-decimal tokens; display drops $10.00 → $0.40, so the bag is $100 market
+/// ($80 haircutted) against debt 600 → liquidatable. Repay 99 and seize all but 1 wei:
+/// seized market ≈ $100 sits inside the band [99, 100.98]. The 1 wei left behind is worth
+/// 0.40 / 10^18 = 4e-19, which truncates to $0 at Decimal256's 18 places — priceable, seizable,
+/// and worth nothing. Residual 501 is booked as bad debt even though the map is not empty.
+#[test]
+fn liquidate_worthless_priceable_remainder_books_bad_debt() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        instantiate_msg_with_wei_collateral(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let wei_amount = 250 * ONE_WHOLE_18;
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(WEI_COLLATERAL.to_string(), display_price("10.0", 18));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(wei_amount, WEI_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+
+    // $2500 market, $2000 haircutted; debt 600 → LTV 30%, healthy.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(600),
+        },
+    )
+    .expect("borrow");
+
+    // $100 market, $80 haircutted → LTV 600/80, liquidatable.
+    prices.insert(WEI_COLLATERAL.to_string(), display_price("0.40", 18));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(99, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount - 1),
+        },
+    )
+    .expect("worthless priceable remainder should liquidate and write off");
+
+    let bad_debt = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+        .expect("bad_debt_underlying attribute");
+    assert_eq!(bad_debt.value, "501");
+    let deficit_attr = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_DEFICIT_UNDERLYING)
+        .expect("deficit_underlying attribute");
+    assert_eq!(deficit_attr.value, "501");
+
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0,
+        "write-off must clear the borrow even though the map is non-empty"
+    );
+    let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(leftover.amounts.get(WEI_COLLATERAL), Some(&1));
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, 501);
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after worthless-remainder write-off",
+    )
+    .unwrap();
+}
+
+/// Full repayment with an unpriceable leftover must clear debt without booking bad debt —
+/// there is nothing left to write off.
+#[test]
+fn liquidate_full_repay_with_unpriceable_remainder_does_not_book_bad_debt() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    let mut msg = instantiate_msg_full_haircut_collateral();
+    msg.supported_collateral_assets.push(CollateralAssetV1 {
+        asset_id: UNRELIABLE_COLLATERAL.to_string(),
+        haircut: None,
+    });
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add priced collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    // $710 bag vs $700 debt: full repay sits inside the bonus cap (700 × 1.02 = 714).
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.71"));
+    prices.remove(UNRELIABLE_COLLATERAL);
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(700, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("full repay with unpriceable leftover");
+
+    assert!(
+        res.attributes
+            .iter()
+            .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING),
+        "full repay must not book bad debt"
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, 0);
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after full repay with unpriceable leftover",
+    )
+    .unwrap();
+}
+
 /// Same underwater scenario as `liquidate_bad_debt_books_deficit_and_clears_scaled_borrow`, but
 /// **`bad_debt_loss_allocation: ImmediateLiquidityIndexHaircut`**: no `deficit_underlying`; index cut.
 #[test]
@@ -1604,7 +2005,8 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
 // --- Full close: waive 100% floor when seizure empties the collateral map ---
 
 /// Invariant: a full seizure with residual debt zeros `scaled_borrow` in the same
-/// transaction (empty map + leftover debt is not a reachable post-state).
+/// transaction (empty map + leftover debt is not a reachable post-state). A zero-value
+/// remainder (unpriceable leftover) is the same: see `liquidate_zero_value_remainder_books_bad_debt`.
 #[test]
 fn liquidate_full_close_priced_dust_books_deficit() {
     let (mut deps, env) = setup_priced_dust_borrower(BadDebtLossAllocation::DeferredToDeficit);
@@ -1710,7 +2112,7 @@ fn liquidate_full_close_priced_dust_immediate_haircut() {
 #[test]
 fn liquidate_full_close_valuable_bag_rejected_by_bonus_cap() {
     let (mut deps, env, _, collateral_amount) = setup_liquidatable_borrower();
-    let repay_amount = 374u128; // meets min repay so the band, not the floor, is what rejects
+    let repay_amount = 374u128; // ample repay, so the bonus cap is what rejects
 
     let err = execute(
         deps.as_mut(),
@@ -1743,7 +2145,8 @@ fn liquidate_full_close_valuable_bag_rejected_by_bonus_cap() {
 fn liquidate_partial_seizure_still_requires_100_percent_floor() {
     let (mut deps, env, _, _) = setup_liquidatable_borrower();
     let repay_amount = 374u128;
-    // Strict subset: 1 unit at $0.83 is below 100% of repay 374; not a full close, so the floor binds.
+    // Strict subset: 1 unit at $0.83 is below 100% of repay 374; not a full close, so the 100%
+    // floor binds (and binds before the post-state health check).
     let err = execute(
         deps.as_mut(),
         env,
