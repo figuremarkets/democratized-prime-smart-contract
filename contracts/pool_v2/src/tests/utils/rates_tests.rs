@@ -5,7 +5,8 @@ use crate::model::error::ContractError;
 use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
 use crate::utils::rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization, index_growth_factor,
-    lender_rate_from_utilization, reserve_totals_and_cash_u128, time_elapsed_seconds,
+    lender_rate_from_utilization, reserve_totals_and_cash_u128, scaled_to_underlying_borrow,
+    scaled_to_underlying_borrow_ceil, time_elapsed_seconds, underlying_to_scaled_borrow_ceil,
     underlying_to_scaled_liquidity,
 };
 use cosmwasm_std::{Decimal256, Timestamp, Uint128, Uint256};
@@ -463,6 +464,47 @@ fn apply_pro_rata_liquidity_index_haircut_errors_when_floor_loss_on_fractional_l
         _ => panic!("expected IllegalStateError, got {:?}", err),
     }
     assert_eq!(r.liquidity_index, index_before);
+}
+
+#[test]
+fn scaled_to_underlying_borrow_ceil_rounds_up_when_fractional() {
+    let bi = Decimal256::from_str("1.05").unwrap();
+    assert_eq!(scaled_to_underlying_borrow(99, bi).unwrap(), 103);
+    assert_eq!(scaled_to_underlying_borrow_ceil(99, bi).unwrap(), 104);
+}
+
+#[test]
+fn scaled_to_underlying_borrow_ceil_matches_floor_when_exact() {
+    let bi = Decimal256::from_str("1.5").unwrap();
+    assert_eq!(scaled_to_underlying_borrow(2, bi).unwrap(), 3);
+    assert_eq!(scaled_to_underlying_borrow_ceil(2, bi).unwrap(), 3);
+}
+
+/// Σ floor(s_i · bi) can undershoot floor((Σ s_i) · bi); Σ ceil covers the aggregate book.
+#[test]
+fn sum_of_ceiled_payoffs_covers_aggregate_floored_debt() {
+    let bi = Decimal256::from_str("1.0000000317097919").unwrap();
+    let n_borrowers = 500u128;
+    let s_i = underlying_to_scaled_borrow_ceil(1_000_000, bi).unwrap();
+    let paid_floor: u128 = (0..n_borrowers)
+        .map(|_| scaled_to_underlying_borrow(s_i, bi).unwrap())
+        .sum();
+    let paid_ceil: u128 = (0..n_borrowers)
+        .map(|_| scaled_to_underlying_borrow_ceil(s_i, bi).unwrap())
+        .sum();
+    let booked_aggregate = scaled_to_underlying_borrow(s_i * n_borrowers, bi).unwrap();
+    assert!(
+        paid_floor < booked_aggregate,
+        "floor payoffs {} should undershoot aggregate {}",
+        paid_floor,
+        booked_aggregate
+    );
+    assert!(
+        paid_ceil >= booked_aggregate,
+        "ceil payoffs {} must cover aggregate {}",
+        paid_ceil,
+        booked_aggregate
+    );
 }
 
 fn expected_haircut_index(r: &ReserveStateV1, loss: u128) -> Decimal256 {

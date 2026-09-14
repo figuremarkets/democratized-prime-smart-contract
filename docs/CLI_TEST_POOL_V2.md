@@ -583,7 +583,7 @@ provenanced tx wasm execute $POOL '{"borrow":{"amount":"50000000"}}' \
 provenanced query wasm contract-state smart $POOL '{"get_borrower_position":{"address":"'$BORROWER'"}}' --chain-id $CHAIN_ID --testnet -o json
 ```
 
-**4.7 Repay** (borrower) → verify debt decreased (e.g. repay 25 YLDS = 25000000):
+**4.7 Repay** (borrower) → verify debt decreased (e.g. repay 25 YLDS = 25000000). Overpay to fully close (`ceil` of scaled debt; excess is refunded).
 
 ```bash
 provenanced tx wasm execute $POOL '{"repay":{}}' \

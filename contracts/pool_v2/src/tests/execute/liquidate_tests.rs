@@ -26,7 +26,7 @@ use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
     compute_effective_reserve, get_asset_prices_for_borrower, get_borrower_health,
-    scaled_to_underlying_borrow,
+    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil,
 };
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -918,7 +918,7 @@ fn liquidate_borrower_with_no_debt_fails() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .unwrap();
     let scaled = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
-    let debt = scaled_to_underlying_borrow(scaled, reserve.borrow_index).unwrap();
+    let debt = scaled_to_underlying_borrow_ceil(scaled, reserve.borrow_index).unwrap();
     assert!(debt >= 600, "setup should have debt");
 
     execute(
@@ -1189,9 +1189,7 @@ fn liquidate_succeeds_and_sends_collateral_to_owner() {
     assert_reserve_assets_liabilities_tie_out(deps.as_ref().storage, "after liquidate").unwrap();
 }
 
-/// Full debt repayment via liquidation after interest has accrued: without the double-floor fix,
-/// scaled_repay = floor(debt_underlying/borrow_index) can be < scaled_debt, leaving dust. Advance
-/// time so borrow_index > 1, then liquidate with sent >= debt_underlying; assert scaled_borrow == 0.
+/// Full close after index growth: send ceil(s · bi) and scaled debt must clear.
 #[test]
 fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
     let (mut deps, mut env, _debt_amount, collateral_amount) = setup_liquidatable_borrower();
@@ -1203,13 +1201,14 @@ fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .unwrap();
     let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
-    let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let debt_underlying =
+        scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
     assert!(
         reserve.borrow_index > Decimal256::one(),
         "index should grow after time advance"
     );
 
-    // Min repay to satisfy LTV (unchanged by time for this setup). Send full debt to clear position.
+    // Send ceil(s · bi) to clear scaled debt.
     let sent = debt_underlying;
     // Market value of seized collateral in [100%, 102%] of debt. After 1y accrual debt > 600 (e.g. 619). Price 0.83 → need ~746–761 units. Use 755 (755*0.83 ≈ 626.65).
     let seize_units = 755u128;
@@ -1248,6 +1247,47 @@ fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
         "after liquidate (full debt after accrual)",
     )
     .unwrap();
+}
+
+/// Full seizure with only floor(s · bi) must not book rounding residue as bad debt.
+#[test]
+fn liquidate_full_close_rejects_floored_payoff_rounding_residue() {
+    let (mut deps, mut env) = setup_priced_dust_borrower(BadDebtLossAllocation::DeferredToDeficit);
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let floor_payoff = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let ceil_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
+    assert_eq!(ceil_payoff, floor_payoff + 1);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(OWNER),
+            &[coin(floor_payoff, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("requires the ceiled payoff"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
 }
 
 /// When the contract owner sends more than the borrower's total debt, only debt is applied and excess is refunded

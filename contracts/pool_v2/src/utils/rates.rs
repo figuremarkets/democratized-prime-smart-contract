@@ -17,6 +17,8 @@
 //!   we don't remove more scaled units than the repayment entitles.
 //! - **Scaled → underlying (floor/truncate)** when we read balances or debt: we never round up,
 //!   so withdrawable/debt is slightly under the true value; dust stays in the pool.
+//! - **Scaled → underlying (ceil)** for full close on Repay/Liquidate only (`ceil(s · bi)`),
+//!   so collected coins cover aggregate `floor((Σ s) · bi)`. Quotes and LTV stay floored.
 
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
@@ -267,9 +269,8 @@ pub fn scaled_to_underlying_liquidity(
 
 /// Convert scaled borrow to underlying (floor/truncate): underlying = scaled × borrow_index.
 ///
-/// Used for debt queries, repay checks, and liquidation: "how much does the user owe?" We truncate
-/// so reported debt is never more than the true value—we never over-state what's owed. Repay and
-/// liquidation use this value, so rounding is in the protocol’s favor (slightly under true debt).
+/// Quotes, cash, utilization, and LTV. Full close on Repay/Liquidate uses
+/// [`scaled_to_underlying_borrow_ceil`].
 pub fn scaled_to_underlying_borrow(
     scaled: u128,
     borrow_index: Decimal256,
@@ -281,6 +282,27 @@ pub fn scaled_to_underlying_borrow(
     let whole = atomics.checked_div(exp)?;
     let out = uint256_to_u128(whole).map_err(|_| illegal_state("underlying borrow overflow"))?;
     Ok(out)
+}
+
+/// Convert scaled borrow to underlying (ceil): `ceil(scaled × borrow_index)`.
+///
+/// Full-close charge on Repay and Liquidate only. Quotes and LTV stay on the floor helper.
+pub fn scaled_to_underlying_borrow_ceil(
+    scaled: u128,
+    borrow_index: Decimal256,
+) -> Result<u128, ContractError> {
+    let scaled_d = Decimal256::from_ratio(Uint128::from(scaled), Uint128::from(1u128));
+    let underlying_d = scaled_d.checked_mul(borrow_index)?;
+    let atomics = underlying_d.atomics();
+    let exp = Uint256::from(10u64).pow(18u32);
+    let whole = atomics.checked_div(exp)?;
+    let remainder = atomics.checked_rem(exp)?;
+    let whole_ceil = if remainder.is_zero() {
+        whole
+    } else {
+        whole.checked_add(Uint256::from(1u64))?
+    };
+    uint256_to_u128(whole_ceil).map_err(|_| illegal_state("ceiled underlying borrow overflow"))
 }
 
 /// Total liquidity, total borrow, and cash in u128 (floor), for execute limits.

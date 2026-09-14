@@ -24,10 +24,11 @@ use crate::instantiate::instantiate_contract;
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
-use crate::storage::get_reserve_state_v1;
+use crate::storage::{get_reserve_state_v1, get_scaled_borrow};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::utils::{
-    compute_effective_reserve, reserve_totals_and_cash_u128, scaled_to_underlying_liquidity,
+    compute_effective_reserve, reserve_totals_and_cash_u128, scaled_to_underlying_borrow_ceil,
+    scaled_to_underlying_liquidity,
 };
 use cosmwasm_std::testing::{message_info, mock_env};
 use cosmwasm_std::{
@@ -289,20 +290,19 @@ fn lend_rounding_audit_scenario_does_not_inflate_liabilities_or_drain_reserve() 
 
     // --- Unwind borrow so sole lender can exit; track returned principal back into vault ---
 
-    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
-    let (_, total_borrow, _) = reserve_totals_and_cash_u128(&reserve).unwrap();
+    let projected = compute_effective_reserve(deps.as_ref().storage, env.block.time, &rate_params)
+        .expect("compute_effective_reserve should succeed");
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let payoff = scaled_to_underlying_borrow_ceil(scaled_debt, projected.borrow_index).unwrap();
 
     execute(
         deps.as_mut(),
         env.clone(),
-        message_info(
-            &Addr::unchecked(BORROWER),
-            &[coin(total_borrow, LENDING_DENOM)],
-        ),
+        message_info(&Addr::unchecked(BORROWER), &[coin(payoff, LENDING_DENOM)]),
         ExecuteMsg::Repay {},
     )
     .expect("repay should succeed");
-    contract_balance = contract_balance.saturating_add(total_borrow);
+    contract_balance = contract_balance.saturating_add(payoff);
 
     let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     let lender_scaled = reserve.total_scaled_liquidity;

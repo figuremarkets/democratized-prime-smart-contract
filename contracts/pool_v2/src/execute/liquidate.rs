@@ -17,13 +17,14 @@
 //! empty map **or** a remainder with no haircutted USD (unpriceable leftover) is booked in
 //! the same transaction via `bad_debt_loss_allocation`.
 //!
-//! **How much must be repaid:** there is no closed-form minimum. The repay plus seizure must
-//! leave the borrower at or below `margin_rate`, which is checked against the real post-state
-//! (`new_amounts` and `new_scaled_debt`) rather than predicted up front. Full repayment, a
-//! full close, and a remainder whose haircutted USD is zero (unpriceable leftover, or
-//! priceable leftover that truncates to $0) are exempt from that health check — residual
-//! debt against a zero-value bag is booked as bad debt in the same tx. Only a non-zero
-//! attached amount is required at the funds check.
+//! **How much must be repaid:** there is no closed-form minimum. Actual repay is
+//! `min(sent, ceil(scaled × borrow_index))`. The repay plus seizure must leave the borrower
+//! at or below `margin_rate`, which is checked against the real post-state (`new_amounts` and
+//! `new_scaled_debt`) rather than predicted up front. Full repayment, a full close, and a
+//! remainder whose haircutted USD is zero (unpriceable leftover, or priceable leftover that
+//! truncates to $0) are exempt from that health check — residual debt against a zero-value
+//! bag is booked as bad debt in the same tx. Only a non-zero attached amount is required at
+//! the funds check. Full close of scaled debt requires the ceiled payoff.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -66,8 +67,8 @@ use crate::storage::{
 use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_total_collateral_value_usd,
     format_as_percent_string, get_asset_prices_for_liquidation, get_borrower_health,
-    scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
-    validate_single_coin_denom, LiquidationPrices, WithRates,
+    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow,
+    update_reserve_indexes, validate_single_coin_denom, LiquidationPrices, WithRates,
 };
 use cosmwasm_std::{
     ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
@@ -115,6 +116,7 @@ pub fn liquidate(
         )
     );
     let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index)?;
+    let debt_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index)?;
     ensure!(
         debt_underlying > 0,
         illegal_argument("Borrower has no debt (scaled borrow rounds to zero underlying; dust)",)
@@ -184,9 +186,9 @@ pub fn liquidate(
     // Only a non-zero amount is required; how much is *enough* is decided by post-state health.
     let sent = validate_single_coin_denom(&info, &contract.lending_denom, Uint128::one())?;
     let sent_u128 = sent.u128();
-    let actual_repay_underlying = sent_u128.min(debt_underlying);
-    // Full repay: use scaled_debt directly to avoid double-floor dust (same as repay.rs).
-    let scaled_repay = if actual_repay_underlying >= debt_underlying {
+    // LTV/health use floor debt; cancelling all scaled units requires and collects ceil(s · bi).
+    let actual_repay_underlying = sent_u128.min(debt_payoff);
+    let scaled_repay = if actual_repay_underlying >= debt_payoff {
         scaled_debt
     } else {
         underlying_to_scaled_borrow(actual_repay_underlying, reserve.borrow_index)?
@@ -281,6 +283,12 @@ pub fn liquidate(
     let is_full_close = post_collateral.amounts.is_empty();
 
     // ---------- 7. USD band vs repay (100% floor waived on full close); bad-debt flag ----------
+    ensure!(
+        !(is_full_close && sent_u128 >= debt_underlying && sent_u128 < debt_payoff),
+        illegal_argument(
+            "Full collateral seizure with full debt repayment requires the ceiled payoff amount",
+        )
+    );
     ensure!(
         is_full_close || seized_value_usd >= min_collateral_value_required,
         illegal_argument(format!(

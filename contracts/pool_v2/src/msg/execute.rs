@@ -53,7 +53,8 @@ pub enum ExecuteMsg {
     /// Borrow against collateral.
     Borrow { amount: Uint128 },
 
-    /// Repay borrowed amount (from info.funds).
+    /// Repay borrowed amount (from info.funds). Full close is `ceil(scaled · borrow_index)`;
+    /// excess is refunded. Amounts that do not reduce scaled debt are rejected.
     Repay {},
 
     /// Add collateral (from info.funds).
@@ -66,9 +67,9 @@ pub enum ExecuteMsg {
 
     /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
     /// Permissionless still requires the owner when unpriceable collateral is load-bearing.
-    /// Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt),
-    /// excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the
-    /// amount repaid, except a full close waives the 100% floor.
+    /// Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is
+    /// `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in
+    /// [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.

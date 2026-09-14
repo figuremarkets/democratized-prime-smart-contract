@@ -8,12 +8,16 @@ use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
-use crate::storage::{get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow};
+use crate::storage::{
+    get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow, set_reserve_state_v1,
+    set_scaled_borrow,
+};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
-    compute_effective_reserve, scaled_to_underlying_borrow, scaled_to_underlying_liquidity,
+    compute_effective_reserve, scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil,
+    scaled_to_underlying_liquidity,
 };
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -272,7 +276,7 @@ fn repay_succeeds_full_payoff() {
 
 /// Full repayment after interest has accrued: without the double-floor fix, scaled_repay =
 /// floor(debt_underlying/borrow_index) can be < scaled_debt, leaving irremovable dust. This test
-/// advances time so borrow_index > 1, then repays amount >= debt_underlying and asserts
+/// advances time so borrow_index > 1, then repays amount >= ceil(scaled · index) and asserts
 /// scaled_borrow becomes 0 (and borrower can remove all collateral).
 #[test]
 fn repay_full_after_interest_accrual_clears_scaled_debt() {
@@ -286,7 +290,8 @@ fn repay_full_after_interest_accrual_clears_scaled_debt() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .unwrap();
     let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
-    let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let debt_underlying =
+        scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
     assert!(
         reserve.borrow_index > Decimal256::one(),
         "index should grow after time advance"
@@ -296,7 +301,7 @@ fn repay_full_after_interest_accrual_clears_scaled_debt() {
         "debt should accrue interest"
     );
 
-    // Repay full debt (user sends at least debt_underlying).
+    // Repay full debt (user sends at least ceil(scaled · index); queries still return floor).
     let repay_amount = debt_underlying;
     let res = execute(
         deps.as_mut(),
@@ -319,6 +324,117 @@ fn repay_full_after_interest_accrual_clears_scaled_debt() {
         scaled_debt, reserve.borrow_index
     );
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
+}
+
+/// Floored query quote is not a close when ceil is one unit higher.
+#[test]
+fn repay_floored_quote_does_not_close_when_ceil_payoff_is_higher() {
+    let (mut deps, env, _) = setup_borrower_with_debt();
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.borrow_index = Decimal256::from_str("1.05").unwrap();
+    reserve.last_updated_at = env.block.time;
+    reserve.total_scaled_borrow = 99;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+    set_scaled_borrow(deps.as_mut().storage, BORROWER, 99).unwrap();
+
+    let floor_debt = scaled_to_underlying_borrow(99, reserve.borrow_index).unwrap();
+    let ceil_debt = scaled_to_underlying_borrow_ceil(99, reserve.borrow_index).unwrap();
+    assert_eq!(floor_debt, 103);
+    assert_eq!(ceil_debt, 104);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(floor_debt, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("partial repay of the floored quote should succeed");
+
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        1,
+        "exact floored quote must not take the full-close branch"
+    );
+
+    let leftover_floor = scaled_to_underlying_borrow(1, reserve.borrow_index).unwrap();
+    let leftover_ceil = scaled_to_underlying_borrow_ceil(1, reserve.borrow_index).unwrap();
+    assert_eq!(leftover_floor, 1);
+    assert_eq!(leftover_ceil, 2);
+
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(leftover_floor, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("too small to reduce debt"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        1
+    );
+
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(leftover_ceil, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("ceil payoff should close the leftover");
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn repay_rejects_amount_that_does_not_reduce_scaled_debt() {
+    let (mut deps, env, _) = setup_borrower_with_debt();
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.borrow_index = Decimal256::from_str("1.05").unwrap();
+    reserve.last_updated_at = env.block.time;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+
+    let scaled_before = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("too small to reduce debt"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        scaled_before
+    );
 }
 
 #[test]

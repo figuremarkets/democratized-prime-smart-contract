@@ -52,7 +52,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Repay borrowed amount (from info.funds).",
+      "description": "Repay borrowed amount (from info.funds). Full close is `ceil(scaled · borrow_index)`; excess is refunded. Amounts that do not reduce scaled debt are rejected.",
       "type": "object",
       "required": [
         "repay"
@@ -103,7 +103,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Permissionless still requires the owner when unpriceable collateral is load-bearing. Liquidator repays debt via funds (one coin, lending denom); repay amount = min(sent, debt), excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.",
+      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Permissionless still requires the owner when unpriceable collateral is load-bearing. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.",
       "type": "object",
       "required": [
         "liquidate"
