@@ -6,10 +6,9 @@ use provwasm_std::types::provenance::attribute::v1::AttributeQuerier;
 use std::collections::HashSet;
 use std::convert::TryInto;
 
-/// Max attributes requested per Provenance `scan` page. Passing an explicit limit
-/// avoids the unbounded default that Provenance warns can consume a high amount of gas.
+/// Page size for wildcard `scan` (returned matches). Combined with `ATTR_SCAN_MAX_PAGES`.
 const ATTR_SCAN_PAGE_LIMIT: u64 = 100;
-/// Cap the number of scan pages so a densely attributed account cannot DoS the check.
+/// Bounds returned matches, not records iterated (FilteredPaginate counts accepted entries).
 const ATTR_SCAN_MAX_PAGES: u32 = 5;
 
 /// Ensure exactly one coin sent and it matches lending denom; return its amount.
@@ -78,11 +77,10 @@ pub fn validate_required_attr_patterns(attrs: &[String]) -> Result<(), ContractE
     Ok(())
 }
 
-/// True when `attr_name` satisfies a leading-wildcard pattern `*.suffix` (e.g. `figure.kyb.pb` for `*.kyb.pb`).
+/// True when `attr_name` satisfies marker `MatchAttribute` for `*.suffix`.
+/// `suffix` is `required[1..]` (the `.` stays), e.g. `.kyb.pb` for `*.kyb.pb`.
 fn attribute_matches_wildcard_suffix(attr_name: &str, suffix: &str) -> bool {
-    attr_name.len() > suffix.len()
-        && attr_name.ends_with(suffix)
-        && attr_name.as_bytes().get(attr_name.len() - suffix.len() - 1) == Some(&b'.')
+    attr_name.ends_with(suffix)
 }
 
 /// Check whether `account` has the required attribute (exact name or `*.suffix` wildcard).
@@ -91,8 +89,10 @@ fn account_has_required_attribute<Q: cosmwasm_std::CustomQuery>(
     account: &str,
     required: &str,
 ) -> Result<bool, ContractError> {
-    if let Some(suffix) = required.strip_prefix("*.") {
-        Ok(scan_has_wildcard_match(q, account, suffix)?)
+    if required.starts_with("*.") {
+        // MatchAttribute: keep the '.' (`*.kyb.pb` → `.kyb.pb`). Scan then uses the same
+        // HasSuffix primitive, so `hackfiat.pb` cannot satisfy `*.fiat.pb` on-chain.
+        Ok(scan_has_wildcard_match(q, account, &required[1..])?)
     } else {
         let res = q.attribute(account.to_string(), required.to_string(), None)?;
         Ok(!res.attributes.is_empty())
@@ -109,9 +109,8 @@ fn scan_page_request(key: Vec<u8>) -> PageRequest {
     }
 }
 
-/// Provenance `scan` is a raw string-suffix match, so it also returns names like
-/// `hackfiat.pb` for suffix `fiat.pb`. Re-filter on the `.` segment boundary; do NOT
-/// simplify to `!attributes.is_empty()` — that reintroduces the wildcard-injection bug.
+/// `suffix` includes the leading `.` (same as marker `MatchAttribute`). Re-filter anyway;
+/// do NOT simplify to `!attributes.is_empty()` if a future change strips the dot again.
 fn scan_has_wildcard_match<Q: cosmwasm_std::CustomQuery>(
     q: &AttributeQuerier<'_, Q>,
     account: &str,
