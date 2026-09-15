@@ -17,8 +17,9 @@
 //!   we don't remove more scaled units than the repayment entitles.
 //! - **Scaled → underlying (floor/truncate)** when we read balances or debt: we never round up,
 //!   so withdrawable/debt is slightly under the true value; dust stays in the pool.
-//! - **Scaled → underlying (ceil)** for full close on Repay/Liquidate only (`ceil(s · bi)`),
-//!   so collected coins cover aggregate `floor((Σ s) · bi)`. Quotes and LTV stay floored.
+//! - **Scaled → underlying (ceil)** for full close on Repay/Liquidate (`ceil(s · bi)`), and for
+//!   the Liquidate bad-debt write-off of leftover scaled, so collected coins / booked loss cover
+//!   aggregate `floor((Σ s) · bi)`. Quotes and LTV stay floored.
 
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};

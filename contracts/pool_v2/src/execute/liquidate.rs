@@ -24,7 +24,8 @@
 //! remainder whose haircutted USD is zero (unpriceable leftover, or priceable leftover that
 //! truncates to $0) are exempt from that health check — residual debt against a zero-value
 //! bag is booked as bad debt in the same tx. Only a non-zero attached amount is required at
-//! the funds check. Full close of scaled debt requires the ceiled payoff.
+//! the funds check. Cancelling all scaled debt requires the ceiled payoff, whether or not the
+//! collateral map empties.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -284,12 +285,6 @@ pub fn liquidate(
 
     // ---------- 7. USD band vs repay (100% floor waived on full close); bad-debt flag ----------
     ensure!(
-        !(is_full_close && sent_u128 >= debt_underlying && sent_u128 < debt_payoff),
-        illegal_argument(
-            "Full collateral seizure with full debt repayment requires the ceiled payoff amount",
-        )
-    );
-    ensure!(
         is_full_close || seized_value_usd >= min_collateral_value_required,
         illegal_argument(format!(
             "Collateral to seize value {} is below required 100% of repay value {} \
@@ -321,6 +316,20 @@ pub fn liquidate(
         asset_prices,
         &contract.supported_collateral_assets,
     )?;
+
+    // A remainder worth nothing routes residual scaled debt to the bad-debt path below. If the
+    // liquidator supplied the floored debt but not the ceiled payoff, that residual is a one-unit
+    // rounding artefact, not insolvency — reject rather than book it as a loss. This must key off
+    // the same condition as `bad_debt`; an empty map is only one way to reach $0.
+    ensure!(
+        !(post_collateral_value_usd.is_zero()
+            && sent_u128 >= debt_underlying
+            && sent_u128 < debt_payoff),
+        illegal_argument(
+            "Cancelling all scaled debt against a zero-value remainder requires the ceiled payoff amount",
+        )
+    );
+
     if !is_full_close && new_scaled_debt > 0 && !post_collateral_value_usd.is_zero() {
         let post_debt_underlying =
             scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?;
@@ -349,7 +358,10 @@ pub fn liquidate(
     // clears every priceable unit (or a remainder that haircuts to $0) hits the same path.
     let bad_debt = new_scaled_debt > 0 && post_collateral_value_usd.is_zero();
     let bad_debt_underlying_amt = if bad_debt {
-        scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?
+        // Cover the aggregate floor drop from cancelling `new_scaled_debt`. `floor(s' · bi)` can
+        // be 1 short of `floor(T · bi) − floor((T − s') · bi)`; ceil is at most 1 over exact and
+        // keeps implied cash conservative. Immediate haircut still requires the amount `< L`.
+        scaled_to_underlying_borrow_ceil(new_scaled_debt, reserve.borrow_index)?
     } else {
         0u128
     };
