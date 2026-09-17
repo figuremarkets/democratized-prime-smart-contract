@@ -355,7 +355,7 @@ fn lender_attrs_fail_when_wildcard_suffix_only() {
 #[test]
 fn wildcard_rejects_suffix_injection_from_scan() {
     let mut deps = mock_provenance_dependencies();
-    // Scan on suffix `fiat.pb` returns a raw-suffix false positive.
+    // Scan is on `.fiat.pb`; a mock that still returns `hackfiat.pb` must not pass.
     setup_scan_attributes(
         &mut deps.querier,
         "tp1user",
