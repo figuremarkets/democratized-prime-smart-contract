@@ -69,7 +69,7 @@ pub enum ExecuteMsg {
     /// Permissionless still requires the owner when unpriceable collateral is load-bearing.
     /// Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is
     /// `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in
-    /// [100%, liquidation_bonus_rate] of the amount repaid, except a full close waives the 100% floor.
+    /// [100%, liquidation_bonus_rate] of the amount repaid, except a $0 remainder waives the 100% floor.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.

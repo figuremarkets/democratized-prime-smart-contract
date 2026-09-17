@@ -1405,6 +1405,110 @@ fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
     assert_eq!(collateral.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
 }
 
+/// Same bag as `liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue`, paying
+/// the ceiled payoff. The 100% floor is waived because the remainder is worth $0, so ceil can
+/// clear scaled debt instead of bouncing off the band.
+#[test]
+fn liquidate_zero_value_remainder_ceiled_payoff_clears_scaled_debt() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        default_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(2000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add priced collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.355"));
+    prices.remove(UNRELIABLE_COLLATERAL);
+    set_oracle_prices(&mut deps.querier, prices);
+
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let floor_payoff = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let ceil_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
+    assert_eq!(ceil_payoff, floor_payoff + 1);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(ceil_payoff, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 2000),
+        },
+    )
+    .expect("ceiled payoff should close against a $0 remainder");
+
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(
+        res.attributes
+            .iter()
+            .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING),
+        "full ceiled close must not book bad debt"
+    );
+    let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert!(!leftover.amounts.contains_key(COLLATERAL_DENOM));
+    assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after ceiled close with $0 remainder",
+    )
+    .unwrap();
+}
+
 /// When the contract owner sends more than the borrower's total debt, only debt is applied and excess is refunded
 /// (BankMsg::Send back to owner). Same behavior as Repay.
 #[test]
