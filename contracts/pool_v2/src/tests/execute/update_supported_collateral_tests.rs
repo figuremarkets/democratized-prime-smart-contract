@@ -411,6 +411,38 @@ fn update_supported_collateral_fails_when_asset_id_is_lending_denom() {
 }
 
 #[test]
+fn update_supported_collateral_fails_when_haircut_is_zero() {
+    let (mut deps, env) = setup_instantiated();
+    let to_update = vec![CollateralAssetV1 {
+        asset_id: ASSET_ONE.to_string(),
+        haircut: Some(Decimal256::zero()),
+    }];
+    let to_remove: Vec<String> = vec![];
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateSupportedCollateral {
+            to_update,
+            to_remove,
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("Haircut must be > 0"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
 fn update_supported_collateral_fails_duplicate_when_same_id_in_update_and_remove() {
     let (mut deps, env) = setup_instantiated();
     let to_update = vec![CollateralAssetV1 {

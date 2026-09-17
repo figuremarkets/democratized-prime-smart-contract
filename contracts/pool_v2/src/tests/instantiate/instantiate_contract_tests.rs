@@ -498,6 +498,36 @@ fn instantiate_fails_invalid_collateral_asset_empty_id() {
 }
 
 #[test]
+fn instantiate_fails_when_collateral_haircut_is_zero() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.supported_collateral_assets = vec![CollateralAssetV1 {
+        asset_id: "asset.one".to_string(),
+        haircut: Some(Decimal256::zero()),
+    }];
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("Haircut must be > 0"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
 fn instantiate_fails_when_collateral_asset_id_is_lending_denom() {
     let mut deps = mock_provenance_dependencies();
     deps.api = deps.api.with_prefix("tp");
