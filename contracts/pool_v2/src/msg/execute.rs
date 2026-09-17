@@ -81,7 +81,10 @@ pub enum ExecuteMsg {
         to_remove: Vec<String>,
     },
 
-    /// Withdraw accrued protocol reserve (contract owner only; no funds). Sends full accrued_reserve in lending denom to recipient, or to the contract owner if recipient is None.
+    /// Withdraw accrued protocol reserve (contract owner only; no funds). Sends at most the bank
+    /// surplus above lender claims to the recipient, or to the contract owner if recipient is None.
+    /// Then zeros the booked bucket. If the cap binds, the unbacked remainder is emitted as
+    /// `unbacked_reserve_writeoff`. Blocked while `deficit_underlying` is positive.
     WithdrawReserve {
         /// Address to receive the reserve; if None, sends to the contract owner.
         recipient: Option<String>,

@@ -1,7 +1,7 @@
 //! Tests for WithdrawReserve execute: success to contract owner or explicit recipient, assets-liabilities tie out,
 //! and failures for non-owner, with funds, and when no accrued reserve.
 
-use crate::constants::ATTRIBUTE_ACTION_NAME;
+use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF};
 use crate::contract::execute;
 use crate::execute::withdraw_reserve::{ACTION, ASSERT_OWNER_ERR};
 use crate::instantiate::instantiate_contract;
@@ -164,6 +164,12 @@ fn setup_with_accrued_reserve() -> (
     .expect("borrow");
 
     env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 31_536_000);
+    // The mock executor does not apply bank sends/receives. Model the contract's actual cash
+    // after the 100m lend and 10m borrow so WithdrawReserve can perform its solvency query.
+    deps.querier.mock_querier.bank.update_balance(
+        env.contract.address.as_str(),
+        vec![coin(lend_amount - 10_000_000, LENDING_DENOM)],
+    );
     (deps, env)
 }
 
@@ -389,4 +395,51 @@ fn withdraw_reserve_fails_when_deficit_positive() {
         }
         _ => panic!("expected IllegalStateError, got {:?}", err),
     }
+}
+
+#[test]
+fn withdraw_reserve_caps_payout_at_bank_surplus_over_lender_claims() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.last_updated_at = env.block.time;
+    let total_liquidity =
+        scaled_to_underlying_liquidity(reserve.total_scaled_liquidity, reserve.liquidity_index)
+            .unwrap();
+    let total_borrow =
+        scaled_to_underlying_borrow(reserve.total_scaled_borrow, reserve.borrow_index).unwrap();
+    let lender_claims = total_liquidity.saturating_sub(total_borrow);
+    let bank_surplus = 1_000u128;
+    reserve.accrued_reserve = 50_000_000;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+    deps.querier.mock_querier.bank.update_balance(
+        env.contract.address.as_str(),
+        vec![coin(lender_claims + bank_surplus, LENDING_DENOM)],
+    );
+
+    let response = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("solvent portion should be withdrawable");
+
+    let amount = match &response.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { amount, .. }) => amount[0].amount.u128(),
+        _ => panic!("expected Bank Send"),
+    };
+    assert_eq!(amount, bank_surplus);
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .accrued_reserve,
+        0,
+        "the unbacked portion must not remain claimable against future lender cash"
+    );
+    let writeoff = response
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF)
+        .expect("capped withdraw must surface the unbacked writeoff");
+    assert_eq!(writeoff.value, (50_000_000u128 - bank_surplus).to_string());
 }
