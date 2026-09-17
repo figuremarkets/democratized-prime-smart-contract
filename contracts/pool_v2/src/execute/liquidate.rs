@@ -12,18 +12,20 @@
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
-//! A **full close** (post-seizure collateral map empty) waives only the 100% floor; the bonus
-//! cap still applies, so a 1-atom repay can empty only a dust bag. Residual debt against an
-//! empty map **or** a remainder with no haircutted USD (unpriceable leftover) is booked in
-//! the same transaction via `bad_debt_loss_allocation`.
+//! A remainder worth **$0** after the seizure (empty map, or leftover with no haircutted USD)
+//! waives only the 100% floor; the bonus cap still applies, so a 1-atom repay can empty only a
+//! dust bag. Residual debt against that remainder is booked in the same transaction via
+//! `bad_debt_loss_allocation`.
 //!
-//! **How much must be repaid:** there is no closed-form minimum. The repay plus seizure must
-//! leave the borrower at or below `margin_rate`, which is checked against the real post-state
-//! (`new_amounts` and `new_scaled_debt`) rather than predicted up front. Full repayment, a
-//! full close, and a remainder whose haircutted USD is zero (unpriceable leftover, or
-//! priceable leftover that truncates to $0) are exempt from that health check — residual
-//! debt against a zero-value bag is booked as bad debt in the same tx. Only a non-zero
-//! attached amount is required at the funds check.
+//! **How much must be repaid:** there is no closed-form minimum. Actual repay is
+//! `min(sent, ceil(scaled × borrow_index))`. The repay plus seizure must leave the borrower
+//! at or below `margin_rate`, which is checked against the real post-state (`new_amounts` and
+//! `new_scaled_debt`) rather than predicted up front. Full repayment, a full close, and a
+//! remainder whose haircutted USD is zero (unpriceable leftover, or priceable leftover that
+//! truncates to $0) are exempt from that health check — residual debt against a zero-value
+//! bag is booked as bad debt in the same tx. Only a non-zero attached amount is required at
+//! the funds check. Cancelling all scaled debt requires the ceiled payoff, whether or not the
+//! collateral map empties.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -43,7 +45,7 @@
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
 //! liquidatable → mixed-bag owner gate (load-bearing unpriceable only) → lending price →
 //! sent funds and scaled repay → per-asset checks and dry-run post-seizure → value band
-//! (100% floor waived on full close) → post-state health → persist reserve and collateral →
+//! (100% floor waived when the remainder is worth $0) → post-state health → persist reserve and collateral →
 //! response (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
@@ -66,8 +68,8 @@ use crate::storage::{
 use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_total_collateral_value_usd,
     format_as_percent_string, get_asset_prices_for_liquidation, get_borrower_health,
-    scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
-    validate_single_coin_denom, LiquidationPrices, WithRates,
+    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow,
+    update_reserve_indexes, validate_single_coin_denom, LiquidationPrices, WithRates,
 };
 use cosmwasm_std::{
     ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
@@ -85,7 +87,7 @@ pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
 /// (counting last-known of dropped feeds would make the position not liquidatable, or a
 /// dropped feed has no stored quote).
 /// Repay debt from funds and seize collateral per `collateral_to_seize`; market value must be
-/// 100%–liquidation_bonus_rate of repay, except a full close waives the 100% floor (bonus cap
+/// 100%–liquidation_bonus_rate of repay, except a $0 remainder waives the 100% floor (bonus cap
 /// still applies). The resulting post-state must be at or below `margin_rate` — there is no
 /// precomputed minimum repay. Residual debt against an empty or zero-value remainder is booked
 /// as bad debt. See module doc for flow.
@@ -115,6 +117,7 @@ pub fn liquidate(
         )
     );
     let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index)?;
+    let debt_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index)?;
     ensure!(
         debt_underlying > 0,
         illegal_argument("Borrower has no debt (scaled borrow rounds to zero underlying; dust)",)
@@ -184,9 +187,9 @@ pub fn liquidate(
     // Only a non-zero amount is required; how much is *enough* is decided by post-state health.
     let sent = validate_single_coin_denom(&info, &contract.lending_denom, Uint128::one())?;
     let sent_u128 = sent.u128();
-    let actual_repay_underlying = sent_u128.min(debt_underlying);
-    // Full repay: use scaled_debt directly to avoid double-floor dust (same as repay.rs).
-    let scaled_repay = if actual_repay_underlying >= debt_underlying {
+    // LTV/health use floor debt; cancelling all scaled units requires and collects ceil(s · bi).
+    let actual_repay_underlying = sent_u128.min(debt_payoff);
+    let scaled_repay = if actual_repay_underlying >= debt_payoff {
         scaled_debt
     } else {
         underlying_to_scaled_borrow(actual_repay_underlying, reserve.borrow_index)?
@@ -261,8 +264,8 @@ pub fn liquidate(
         )
     );
 
-    // Dry-run remaining borrower collateral after this seizure (detect full close / bad debt
-    // before the value band, so the 100% floor can be waived only when the map would be empty).
+    // Dry-run remaining borrower collateral after this seizure (detect a $0 remainder
+    // before the value band, so the 100% floor can be waived when nothing of value is left).
     let mut new_amounts = borrower_collateral.amounts.clone();
     for (asset_id, seize_amt) in &to_seize {
         let cur = *new_amounts.get(asset_id).unwrap_or(&0);
@@ -278,14 +281,18 @@ pub fn liquidate(
     let post_collateral = BorrowerCollateralV1 {
         amounts: new_amounts,
     };
-    let is_full_close = post_collateral.amounts.is_empty();
+    let post_collateral_value_usd = calculate_total_collateral_value_usd(
+        &post_collateral,
+        asset_prices,
+        &contract.supported_collateral_assets,
+    )?;
 
-    // ---------- 7. USD band vs repay (100% floor waived on full close); bad-debt flag ----------
+    // ---------- 7. USD band vs repay (100% floor waived when the remainder is worth $0) ----------
     ensure!(
-        is_full_close || seized_value_usd >= min_collateral_value_required,
+        post_collateral_value_usd.is_zero() || seized_value_usd >= min_collateral_value_required,
         illegal_argument(format!(
             "Collateral to seize value {} is below required 100% of repay value {} \
-             (waived only when the seizure empties the borrower collateral map)",
+             (waived only when the seizure leaves a remainder worth nothing)",
             seized_value_usd, min_collateral_value_required
         ))
     );
@@ -308,12 +315,21 @@ pub fn liquidate(
     // nothing to LTV. Residual debt against that bag is booked as bad debt below (same as a
     // full close), so it does not sit on the books unallocated. Not exploitable: the band still
     // charges ~full market value for the priced collateral that is taken.
-    let post_collateral_value_usd = calculate_total_collateral_value_usd(
-        &post_collateral,
-        asset_prices,
-        &contract.supported_collateral_assets,
-    )?;
-    if !is_full_close && new_scaled_debt > 0 && !post_collateral_value_usd.is_zero() {
+
+    // A remainder worth nothing routes residual scaled debt to the bad-debt path below. If the
+    // liquidator supplied the floored debt but not the ceiled payoff, that residual is a one-unit
+    // rounding artefact, not insolvency — reject rather than book it as a loss. This must key off
+    // the same condition as `bad_debt`; an empty map is only one way to reach $0.
+    ensure!(
+        !(post_collateral_value_usd.is_zero()
+            && sent_u128 >= debt_underlying
+            && sent_u128 < debt_payoff),
+        illegal_argument(
+            "Cancelling all scaled debt against a zero-value remainder requires the ceiled payoff amount",
+        )
+    );
+
+    if new_scaled_debt > 0 && !post_collateral_value_usd.is_zero() {
         let post_debt_underlying =
             scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?;
         let (post_health, post_ltv) = get_borrower_health(
@@ -337,11 +353,14 @@ pub fn liquidate(
     }
 
     // Empty map or remaining collateral with no haircutted USD: leftover scaled debt is a
-    // loss to book, not a live borrow. `is_full_close` is the usual case; a mixed bag that
+    // loss to book, not a live borrow. An empty map is the usual case; a mixed bag that
     // clears every priceable unit (or a remainder that haircuts to $0) hits the same path.
     let bad_debt = new_scaled_debt > 0 && post_collateral_value_usd.is_zero();
     let bad_debt_underlying_amt = if bad_debt {
-        scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?
+        // Cover the aggregate floor drop from cancelling `new_scaled_debt`. `floor(s' · bi)` can
+        // be 1 short of `floor(T · bi) − floor((T − s') · bi)`; ceil is at most 1 over exact and
+        // keeps implied cash conservative. Immediate haircut still requires the amount `< L`.
+        scaled_to_underlying_borrow_ceil(new_scaled_debt, reserve.borrow_index)?
     } else {
         0u128
     };

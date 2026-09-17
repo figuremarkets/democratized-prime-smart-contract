@@ -67,9 +67,8 @@ pub fn borrow(
     let new_scaled = current_scaled.checked_add(scaled_delta).ok_or_else(|| {
         illegal_state("overflow: borrower scaled debt (current_scaled + scaled_delta)")
     })?;
-    // Use the exact debt that will be recorded (floor((current_scaled + ceil(amount/index)) * index))
-    // for the LTV check. Using current_underlying + amount would understate debt due to ceil
-    // rounding and could allow a borrow that pushes LTV slightly above margin_rate.
+    // LTV uses floored recorded debt. Using current_underlying + amount would understate it
+    // (ceil on mint) and could allow a borrow slightly above margin_rate.
     let debt_after_u128 = scaled_to_underlying_borrow(new_scaled, reserve.borrow_index)?;
     let debt_after = Uint128::from(debt_after_u128);
 

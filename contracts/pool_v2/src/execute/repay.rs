@@ -6,16 +6,15 @@ use crate::storage::{
     get_contract_state_v1, get_scaled_borrow, set_reserve_state_v1, set_scaled_borrow,
 };
 use crate::utils::{
-    scaled_to_underlying_borrow, underlying_to_scaled_borrow, update_reserve_indexes,
+    scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow, update_reserve_indexes,
     validate_single_coin_denom, WithRates,
 };
 use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 
 pub const ACTION: &str = "repay";
 
-/// Repay borrow using funds sent in the message. We apply min(sent amount, current debt) so users
-/// can send "pay off full" amounts without failing when interest accrues between query and execute.
-/// Any excess over current debt is sent back to the sender.
+/// Repay with funds in the message. Full close charges ceil(scaled × borrow_index); excess
+/// over that is refunded. Amounts that do not reduce scaled debt are rejected.
 pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
     let contract = get_contract_state_v1(deps.storage)?;
     let amount = validate_single_coin_denom(&info, &contract.lending_denom, Uint128::new(1))?;
@@ -25,17 +24,22 @@ pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Con
 
     let scaled_debt = get_scaled_borrow(deps.storage, info.sender.as_str())?;
     ensure!(scaled_debt > 0, illegal_argument("No borrow to repay"));
-    let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index)?;
+    // Close charges ceil(s · bi) so Σ ceil covers aggregate floor((Σ s) · bi). Queries stay floor.
+    let debt_underlying = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index)?;
     let repay_underlying = amount.min(debt_underlying);
     // When repaying in full (repay_underlying >= debt_underlying), use scaled_debt directly to
-    // avoid double-floor dust: floor(debt_underlying/index) can be < scaled_debt, leaving
-    // irremovable scaled debt (e.g. scaled_debt=99, index=1.05 → debt_underlying=103,
+    // avoid double-floor dust: floor(floor(s·bi)/index) can be < scaled_debt, leaving
+    // irremovable scaled debt (e.g. scaled_debt=99, index=1.05 → floor debt=103,
     // floor(103/1.05)=98, leaving 1 scaled unit stuck forever).
     let scaled_repay = if repay_underlying >= debt_underlying {
         scaled_debt
     } else {
         underlying_to_scaled_borrow(repay_underlying, reserve.borrow_index)?
     };
+    ensure!(
+        scaled_repay > 0,
+        illegal_argument("Repay amount too small to reduce debt")
+    );
 
     let new_scaled = scaled_debt.checked_sub(scaled_repay).ok_or_else(|| {
         illegal_state("underflow: borrower scaled debt (scaled_debt - scaled_repay)")

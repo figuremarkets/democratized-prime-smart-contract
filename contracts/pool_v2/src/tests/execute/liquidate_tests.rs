@@ -26,7 +26,7 @@ use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
     compute_effective_reserve, get_asset_prices_for_borrower, get_borrower_health,
-    scaled_to_underlying_borrow,
+    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow,
 };
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -918,7 +918,7 @@ fn liquidate_borrower_with_no_debt_fails() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .unwrap();
     let scaled = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
-    let debt = scaled_to_underlying_borrow(scaled, reserve.borrow_index).unwrap();
+    let debt = scaled_to_underlying_borrow_ceil(scaled, reserve.borrow_index).unwrap();
     assert!(debt >= 600, "setup should have debt");
 
     execute(
@@ -1189,9 +1189,7 @@ fn liquidate_succeeds_and_sends_collateral_to_owner() {
     assert_reserve_assets_liabilities_tie_out(deps.as_ref().storage, "after liquidate").unwrap();
 }
 
-/// Full debt repayment via liquidation after interest has accrued: without the double-floor fix,
-/// scaled_repay = floor(debt_underlying/borrow_index) can be < scaled_debt, leaving dust. Advance
-/// time so borrow_index > 1, then liquidate with sent >= debt_underlying; assert scaled_borrow == 0.
+/// Full close after index growth: send ceil(s · bi) and scaled debt must clear.
 #[test]
 fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
     let (mut deps, mut env, _debt_amount, collateral_amount) = setup_liquidatable_borrower();
@@ -1203,13 +1201,14 @@ fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
         compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
             .unwrap();
     let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
-    let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let debt_underlying =
+        scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
     assert!(
         reserve.borrow_index > Decimal256::one(),
         "index should grow after time advance"
     );
 
-    // Min repay to satisfy LTV (unchanged by time for this setup). Send full debt to clear position.
+    // Send ceil(s · bi) to clear scaled debt.
     let sent = debt_underlying;
     // Market value of seized collateral in [100%, 102%] of debt. After 1y accrual debt > 600 (e.g. 619). Price 0.83 → need ~746–761 units. Use 755 (755*0.83 ≈ 626.65).
     let seize_units = 755u128;
@@ -1246,6 +1245,266 @@ fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
     assert_reserve_assets_liabilities_tie_out(
         deps.as_ref().storage,
         "after liquidate (full debt after accrual)",
+    )
+    .unwrap();
+}
+
+/// Full seizure with only floor(s · bi) must not book rounding residue as bad debt.
+#[test]
+fn liquidate_full_close_rejects_floored_payoff_rounding_residue() {
+    let (mut deps, mut env) = setup_priced_dust_borrower(BadDebtLossAllocation::DeferredToDeficit);
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
+
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let floor_payoff = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let ceil_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
+    assert_eq!(ceil_payoff, floor_payoff + 1);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(OWNER),
+            &[coin(floor_payoff, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("requires the ceiled payoff"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+/// The guard must key off the same condition as `bad_debt`, not on an empty collateral map:
+/// a **non-empty** remainder worth $0 (unpriceable leftover) reaches the same write-off path.
+///
+/// 2000 priced units at 0.355 → $710 market, $568 haircutted against debt 700 → LTV 123%,
+/// liquidatable. Plus 1 unit of an unpriceable denom that cannot be seized. Repaying
+/// floor(s · bi) and seizing the whole priced side leaves that unpriceable unit, so the map is
+/// not empty but is worth nothing. Seized market $710 stays inside the band [700, 714], so the
+/// rejection can only come from the ceiled-payoff guard.
+#[test]
+fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        default_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(2000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add priced collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    // Priced side falls to $710 market (liquidatable), and the second feed goes away entirely.
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.355"));
+    prices.remove(UNRELIABLE_COLLATERAL);
+    set_oracle_prices(&mut deps.querier, prices);
+
+    // Accrue until the floored and ceiled payoffs differ, so the test cannot pass vacuously.
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let floor_payoff = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let ceil_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
+    assert_eq!(ceil_payoff, floor_payoff + 1);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(OWNER),
+            &[coin(floor_payoff, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 2000),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("requires the ceiled payoff"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+
+    // Nothing was written: the debt is still live and the priced bag is untouched.
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        scaled_debt
+    );
+    let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(collateral.amounts.get(COLLATERAL_DENOM), Some(&2000));
+    assert_eq!(collateral.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+}
+
+/// Same bag as `liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue`, paying
+/// the ceiled payoff. The 100% floor is waived because the remainder is worth $0, so ceil can
+/// clear scaled debt instead of bouncing off the band.
+#[test]
+fn liquidate_zero_value_remainder_ceiled_payoff_clears_scaled_debt() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        default_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(2000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add priced collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.355"));
+    prices.remove(UNRELIABLE_COLLATERAL);
+    set_oracle_prices(&mut deps.querier, prices);
+
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let floor_payoff = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index).unwrap();
+    let ceil_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index).unwrap();
+    assert_eq!(ceil_payoff, floor_payoff + 1);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(ceil_payoff, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 2000),
+        },
+    )
+    .expect("ceiled payoff should close against a $0 remainder");
+
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(
+        res.attributes
+            .iter()
+            .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING),
+        "full ceiled close must not book bad debt"
+    );
+    let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert!(!leftover.amounts.contains_key(COLLATERAL_DENOM));
+    assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after ceiled close with $0 remainder",
     )
     .unwrap();
 }
@@ -1589,6 +1848,101 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", second_err),
     }
+}
+
+/// After index growth, leftover scaled × bi is typically non-integral. Booking `floor` would
+/// leave up to 1 unit of cancelled residual off the deficit; the write-off uses ceil.
+#[test]
+fn liquidate_bad_debt_writeoff_uses_ceiled_residual() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        instantiate_msg_full_haircut_collateral(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.65"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let scaled_debt = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let repay = 650u128;
+    let scaled_repay = underlying_to_scaled_borrow(repay, reserve.borrow_index).unwrap();
+    let residual_scaled = scaled_debt.checked_sub(scaled_repay).unwrap();
+    let floor_writeoff =
+        scaled_to_underlying_borrow(residual_scaled, reserve.borrow_index).unwrap();
+    let ceil_writeoff =
+        scaled_to_underlying_borrow_ceil(residual_scaled, reserve.borrow_index).unwrap();
+    assert_eq!(
+        ceil_writeoff,
+        floor_writeoff + 1,
+        "test requires a fractional residual so floor vs ceil is observable"
+    );
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("underwater liquidate after accrual");
+
+    let bad_debt = res
+        .attributes
+        .iter()
+        .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+        .expect("bad_debt_underlying attribute");
+    assert_eq!(bad_debt.value, ceil_writeoff.to_string());
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.deficit_underlying, ceil_writeoff);
+    assert_reserve_assets_liabilities_tie_out(
+        deps.as_ref().storage,
+        "after ceiled residual write-off",
+    )
+    .unwrap();
 }
 
 /// Same underwater bag as `liquidate_bad_debt_books_deficit_and_clears_scaled_borrow`, plus a

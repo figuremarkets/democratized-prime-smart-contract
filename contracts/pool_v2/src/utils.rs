@@ -21,9 +21,9 @@ pub use rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization,
     compute_effective_reserve, index_growth_factor, lend_borrow_rate_attribute_values,
     lender_rate_from_utilization, protocol_fee_rate, reserve_totals_and_cash_u128,
-    scaled_to_underlying_borrow, scaled_to_underlying_liquidity, time_elapsed_seconds,
-    underlying_to_scaled_borrow, underlying_to_scaled_borrow_ceil, underlying_to_scaled_liquidity,
-    update_reserve_indexes,
+    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil, scaled_to_underlying_liquidity,
+    time_elapsed_seconds, underlying_to_scaled_borrow, underlying_to_scaled_borrow_ceil,
+    underlying_to_scaled_liquidity, update_reserve_indexes,
 };
 pub use response_ext::WithRates;
 pub use validation::{
