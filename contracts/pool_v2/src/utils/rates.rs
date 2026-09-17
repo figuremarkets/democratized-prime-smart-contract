@@ -2,6 +2,8 @@
 //!
 //! Borrower rate: below kink `min + (u/kink)*(target - min)`, above kink `target + (u - kink)/(1 - kink)*(max - target)`.
 //! Lender rate: `borrower_rate * utilization * (1 - reserve_factor)`.
+//! Protocol fee APR: `protocol_fee_rate` is `borrower_rate * reserve_factor` (reserve-factor mode)
+//! or `flat_fee_apr` (flat-spread mode); booked as `floor(total_borrow * fee_apr * dt / year)`.
 //! Index growth: `new_index = old_index * (1 + rate * elapsed_seconds / seconds_per_year)` (linear in time).
 //!
 //! **Borrow vs liquidity index:** Both the lent-supply (liquidity) index and the borrow index use this same
@@ -20,6 +22,9 @@
 //! - **Scaled → underlying (ceil)** for full close on Repay/Liquidate (`ceil(s · bi)`), and for
 //!   the Liquidate bad-debt write-off of leftover scaled, so collected coins / booked loss cover
 //!   aggregate `floor((Σ s) · bi)`. Quotes and LTV stay floored.
+//! - **Protocol fee (floor)** when booking `accrued_reserve`: `floor(pre-accrual total_borrow ×
+//!   protocol_fee_rate × elapsed / seconds_per_year)`. Sub-unit fees stay with lenders. Do not
+//!   derive this as a difference of independently floored borrower and lender totals.
 
 use crate::model::error::{illegal_state, ContractError};
 use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
@@ -83,6 +88,22 @@ pub fn lender_rate_from_utilization(
     }
 }
 
+/// Protocol's share of the borrower APR under the configured fee model.
+/// Together with [`lender_rate_from_utilization`], this partitions borrower interest:
+/// - Reserve factor mode: `borrower_rate * reserve_factor`
+/// - Flat spread mode: `flat_fee_apr`
+pub fn protocol_fee_rate(
+    params: &RateParamsV1,
+    borrower_rate: Decimal256,
+) -> Result<Decimal256, ContractError> {
+    match params.fee_model {
+        FeeModelV1::ReserveFactor => borrower_rate
+            .checked_mul(params.reserve_factor)
+            .map_err(Into::into),
+        FeeModelV1::FlatBorrowSpread => Ok(params.flat_fee_apr),
+    }
+}
+
 /// Time elapsed in seconds (cap at 0 for past timestamps).
 pub fn time_elapsed_seconds(from: Timestamp, to: Timestamp) -> u64 {
     to.seconds().saturating_sub(from.seconds())
@@ -108,7 +129,7 @@ pub fn index_growth_factor(
 
 /// Compute effective reserve state as of `as_of_time` (accrue interest from stored last_updated_at).
 /// Read-only: does not persist. Use for queries so callers see current indexes and implied rates.
-/// When accruing, adds (borrower_interest_delta - lender_interest_delta) to accrued_reserve (protocol share).
+/// Protocol fees are calculated directly from pre-accrual borrows and deliberately rounded down.
 pub fn compute_effective_reserve(
     store: &dyn Storage,
     as_of_time: Timestamp,
@@ -120,15 +141,19 @@ pub fn compute_effective_reserve(
         return reserve.to_ok();
     }
 
-    let utilization = reserve.utilization()?;
+    let total_liquidity = reserve.total_liquidity()?;
+    let total_borrow_before = reserve.total_borrow()?;
+    let utilization = if total_liquidity.is_zero() {
+        Decimal256::zero()
+    } else {
+        total_borrow_before.checked_div(total_liquidity)?
+    };
     let borrower_rate = borrower_rate_from_utilization(params, utilization)?;
     let lender_rate = lender_rate_from_utilization(params, utilization, borrower_rate)?;
 
     let li_factor = index_growth_factor(lender_rate, elapsed, params.seconds_per_year)?;
     let bi_factor = index_growth_factor(borrower_rate, elapsed, params.seconds_per_year)?;
 
-    let old_li = reserve.liquidity_index;
-    let old_bi = reserve.borrow_index;
     let new_li = reserve.liquidity_index.checked_mul(li_factor)?;
     let new_bi = reserve.borrow_index.checked_mul(bi_factor)?;
 
@@ -136,25 +161,32 @@ pub fn compute_effective_reserve(
     reserve.borrow_index = new_bi;
     reserve.last_updated_at = as_of_time;
 
-    // Protocol reserve accrual: (borrower interest - lender interest) this period, in underlying units.
-    // Indexes only grow, so new >= old; underflow would indicate a bug.
-    let old_borrow = scaled_to_underlying_borrow(reserve.total_scaled_borrow, old_bi)?;
-    let new_borrow =
-        scaled_to_underlying_borrow(reserve.total_scaled_borrow, reserve.borrow_index)?;
-    let old_liq = scaled_to_underlying_liquidity(reserve.total_scaled_liquidity, old_li)?;
-    let new_liq =
-        scaled_to_underlying_liquidity(reserve.total_scaled_liquidity, reserve.liquidity_index)?;
-    let borrower_delta = new_borrow.checked_sub(old_borrow).ok_or_else(|| {
-        illegal_state("Reserve accrual: borrow underlying decreased (index invariant)")
-    })?;
-    let lender_delta = new_liq.checked_sub(old_liq).ok_or_else(|| {
-        illegal_state("Reserve accrual: liquidity underlying decreased (index invariant)")
-    })?;
-    // reserve_delta can be 0 when lender_delta >= borrower_delta (rounding with tiny borrow / large liquidity).
-    let reserve_delta = borrower_delta.saturating_sub(lender_delta);
-    reserve.accrued_reserve = reserve.accrued_reserve.saturating_add(reserve_delta);
+    // Compute the protocol share directly from the borrow side:
+    // fee = total_borrow_before * protocol_fee_rate * elapsed / seconds_per_year.
+    //
+    // This is one non-negative term, not a difference of independently floored borrower and
+    // lender totals. Flooring deliberately under-books the protocol and leaves sub-unit dust
+    // with lenders. Do not derive this from the difference between the two indexes; doing so
+    // recreates the accrued-reserve ratchet this direct formula prevents.
+    let time_fraction = Decimal256::from_ratio(
+        Uint128::from(elapsed),
+        Uint128::from(params.seconds_per_year),
+    );
+    let fee = total_borrow_before
+        .checked_mul(protocol_fee_rate(params, borrower_rate)?)?
+        .checked_mul(time_fraction)?;
+    reserve.accrued_reserve = reserve
+        .accrued_reserve
+        .saturating_add(decimal_floor_to_u128(fee)?);
 
     Ok(reserve)
+}
+
+fn decimal_floor_to_u128(value: Decimal256) -> Result<u128, ContractError> {
+    let whole = value
+        .atomics()
+        .checked_div(Uint256::from(10u64).pow(Decimal256::DECIMAL_PLACES))?;
+    uint256_to_u128(whole).map_err(|_| illegal_state("protocol fee overflow"))
 }
 
 /// Update reserve indexes to current block time (accrue interest), then save and return new reserve.

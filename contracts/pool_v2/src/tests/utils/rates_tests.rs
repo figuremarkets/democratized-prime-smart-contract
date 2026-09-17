@@ -3,12 +3,15 @@
 
 use crate::model::error::ContractError;
 use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
+use crate::storage::set_reserve_state_v1;
 use crate::utils::rates::{
-    apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization, index_growth_factor,
-    lender_rate_from_utilization, reserve_totals_and_cash_u128, scaled_to_underlying_borrow,
+    apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization,
+    compute_effective_reserve, index_growth_factor, lender_rate_from_utilization,
+    protocol_fee_rate, reserve_totals_and_cash_u128, scaled_to_underlying_borrow,
     scaled_to_underlying_borrow_ceil, time_elapsed_seconds, underlying_to_scaled_borrow_ceil,
     underlying_to_scaled_liquidity,
 };
+use cosmwasm_std::testing::mock_dependencies;
 use cosmwasm_std::{Decimal256, Timestamp, Uint128, Uint256};
 use std::str::FromStr;
 
@@ -163,6 +166,24 @@ fn lender_rate_flat_spread_mode_matches_sheet_identity() {
 }
 
 #[test]
+fn protocol_fee_rate_uses_borrow_rate_times_reserve_factor() {
+    let params = spreadsheet_rate_params();
+    let borrower_rate = Decimal256::from_str("0.09").unwrap();
+    let actual = protocol_fee_rate(&params, borrower_rate).unwrap();
+    assert_eq!(actual, Decimal256::from_str("0.00045").unwrap());
+}
+
+#[test]
+fn protocol_fee_rate_uses_flat_fee_apr_in_flat_spread_mode() {
+    let mut params = spreadsheet_rate_params();
+    params.fee_model = FeeModelV1::FlatBorrowSpread;
+    params.reserve_factor = Decimal256::zero();
+    params.flat_fee_apr = Decimal256::from_str("0.005").unwrap();
+    let actual = protocol_fee_rate(&params, Decimal256::from_str("0.09").unwrap()).unwrap();
+    assert_eq!(actual, params.flat_fee_apr);
+}
+
+#[test]
 fn rate_params_flat_spread_rejects_fee_above_min_rate() {
     let mut params = spreadsheet_rate_params();
     params.fee_model = FeeModelV1::FlatBorrowSpread;
@@ -208,6 +229,22 @@ fn rate_params_flat_spread_rejects_non_zero_reserve_factor() {
     }
 }
 
+#[test]
+fn rate_params_reserve_factor_allows_zero_protocol_fee() {
+    let mut params = spreadsheet_rate_params();
+    params.reserve_factor = Decimal256::zero();
+    params.validate().expect("zero reserve_factor is allowed");
+}
+
+#[test]
+fn rate_params_flat_spread_allows_zero_protocol_fee() {
+    let mut params = spreadsheet_rate_params();
+    params.fee_model = FeeModelV1::FlatBorrowSpread;
+    params.reserve_factor = Decimal256::zero();
+    params.flat_fee_apr = Decimal256::zero();
+    params.validate().expect("zero flat_fee_apr is allowed");
+}
+
 // --- Index growth ---
 
 #[test]
@@ -241,6 +278,124 @@ fn time_elapsed_seconds_forward_and_backward() {
     let to = Timestamp::from_seconds(1500);
     assert_eq!(time_elapsed_seconds(from, to), 500);
     assert_eq!(time_elapsed_seconds(to, from), 0);
+}
+
+// --- reserve accrual ---
+
+#[test]
+fn reserve_accrual_books_direct_reserve_factor_fee() {
+    let mut deps = mock_dependencies();
+    let mut params = spreadsheet_rate_params();
+    params.min_rate = Decimal256::from_str("0.09").unwrap();
+    params.target_rate = Decimal256::from_str("0.09").unwrap();
+    params.reserve_factor = Decimal256::from_str("0.1").unwrap();
+    let start = reserve(Decimal256::one(), Decimal256::one(), 1_000_000, 700_000);
+    set_reserve_state_v1(deps.as_mut().storage, &start).unwrap();
+
+    let accrued = compute_effective_reserve(
+        deps.as_ref().storage,
+        Timestamp::from_seconds(params.seconds_per_year),
+        &params,
+    )
+    .unwrap();
+
+    // 700,000 borrows * 9% APR * 10% reserve factor * one year.
+    assert_eq!(accrued.accrued_reserve, 6_300);
+}
+
+#[test]
+fn reserve_accrual_books_nothing_when_reserve_factor_is_zero() {
+    let mut deps = mock_dependencies();
+    let mut params = spreadsheet_rate_params();
+    params.reserve_factor = Decimal256::zero();
+    let start = reserve(Decimal256::one(), Decimal256::one(), 1_000_000, 700_000);
+    set_reserve_state_v1(deps.as_mut().storage, &start).unwrap();
+
+    let mut last = start;
+    for n in 1..=20_000u64 {
+        last = compute_effective_reserve(
+            deps.as_ref().storage,
+            Timestamp::from_seconds(n * 60),
+            &params,
+        )
+        .unwrap();
+        set_reserve_state_v1(deps.as_mut().storage, &last).unwrap();
+    }
+    assert_eq!(last.accrued_reserve, 0);
+}
+
+/// Cumulative booked ≤ exact protocol share is the property we care about. A *per-period*
+/// assertion can fail on a large pool: fee is `floor(B × trunc(br·rf) × tf)` while indexes
+/// move by `trunc(rate·tf)`, so one period can overshoot by a fraction of a base unit even
+/// though the running sum stays under-booked (floor loss + lender-index truncation dominate).
+fn assert_reserve_accrual_never_over_books(scaled_liq: u128, scaled_borr: u128, periods: u64) {
+    let mut deps = mock_dependencies();
+    let mut params = spreadsheet_rate_params();
+    params.min_rate = Decimal256::from_str("0.02").unwrap();
+    params.target_rate = Decimal256::from_str("0.10").unwrap();
+    params.max_rate = Decimal256::from_str("0.50").unwrap();
+    params.kink_utilization = Decimal256::from_str("0.80").unwrap();
+    params.reserve_factor = Decimal256::from_str("0.1").unwrap();
+    let start = reserve(
+        Decimal256::one(),
+        Decimal256::one(),
+        scaled_liq,
+        scaled_borr,
+    );
+    set_reserve_state_v1(deps.as_mut().storage, &start).unwrap();
+
+    let mut exact = Decimal256::zero();
+    let mut previous = start;
+    for n in 1..=periods {
+        let accrued = compute_effective_reserve(
+            deps.as_ref().storage,
+            Timestamp::from_seconds(n * 60),
+            &params,
+        )
+        .unwrap();
+        let scaled_borrow = Decimal256::from_ratio(accrued.total_scaled_borrow, Uint128::one());
+        let scaled_liquidity =
+            Decimal256::from_ratio(accrued.total_scaled_liquidity, Uint128::one());
+        let borrower_interest = scaled_borrow
+            .checked_mul(accrued.borrow_index)
+            .unwrap()
+            .checked_sub(scaled_borrow.checked_mul(previous.borrow_index).unwrap())
+            .unwrap();
+        let lender_interest = scaled_liquidity
+            .checked_mul(accrued.liquidity_index)
+            .unwrap()
+            .checked_sub(
+                scaled_liquidity
+                    .checked_mul(previous.liquidity_index)
+                    .unwrap(),
+            )
+            .unwrap();
+        exact = exact
+            .checked_add(borrower_interest)
+            .unwrap()
+            .saturating_sub(lender_interest);
+
+        let booked = Decimal256::from_ratio(accrued.accrued_reserve, Uint128::one());
+        assert!(
+            booked <= exact,
+            "accrual {}: booked reserve {} exceeds exact protocol share {}",
+            n,
+            booked,
+            exact
+        );
+        set_reserve_state_v1(deps.as_mut().storage, &accrued).unwrap();
+        previous = accrued;
+    }
+}
+
+#[test]
+fn reserve_accrual_never_over_books_exact_protocol_share() {
+    assert_reserve_accrual_never_over_books(1_000_000, 700_000, 5_000);
+}
+
+#[test]
+fn reserve_accrual_never_over_books_exact_protocol_share_large_pool() {
+    assert_reserve_accrual_never_over_books(1_000_000_000_000_000, 700_000_000_000_000, 5_000);
 }
 
 // --- reserve_totals_and_cash_u128 ---
