@@ -6,6 +6,7 @@
 //! Held denoms omitted from that credit are named in `unpriceable_collateral`.
 //! Per-asset `satisfiable` is false when a positive requirement could not be quoted
 //! (deliberately coarse: down feed vs zero haircut vs unrepresentable units).
+//! Per-asset amounts use the closed-form `amount_from_usd_haircutted` helper.
 
 use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
@@ -131,11 +132,9 @@ pub fn query_collateral_requirements(
                 AssetRequirementV1::unquotable(asset_id.clone())
             }
             Some(price) => {
-                // units * (display / 10^precision) * haircut >= value_to_cover
-                let pre_haircut = value_to_cover
-                    .checked_div(haircut)
-                    .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
-                match price.amount_from_usd(pre_haircut) {
+                // One fused ceil over display × haircut, then a one-unit bump if truncated
+                // value_usd × haircut is still short of value_to_cover (18-decimal assets).
+                match price.amount_from_usd_haircutted(value_to_cover, haircut) {
                     Ok(amt) => AssetRequirementV1::quoted(asset_id.clone(), Uint128::from(amt)),
                     // Cheap high-precision asset: required base units do not fit u128.
                     Err(ContractError::AmountNotRepresentable) => {
