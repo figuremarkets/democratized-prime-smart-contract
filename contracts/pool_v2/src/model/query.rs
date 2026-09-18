@@ -113,9 +113,10 @@ impl From<ReserveStateResponseV1> for ReserveStateV1 {
 pub struct ReserveResponseV1 {
     /// Effective reserve (indexes accrued to current block) with total_liquidity / total_borrow.
     pub reserve: ReserveStateResponseV1,
-    /// Current borrower APR (from utilization).
+    /// Current borrower APR (from utilization), clamped at `max_rate`.
     pub current_borrower_rate: String,
-    /// Current lender APR (from utilization).
+    /// Current lender APR (from utilization). Not bounded by `max_rate`; when `u > 1` this can
+    /// exceed `borrower_rate * (1 - reserve_factor)` because it is a rate against `total_liquidity`.
     pub current_lender_rate: String,
     /// Utilization (total_borrow / total_liquidity).
     pub utilization: String,
