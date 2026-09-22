@@ -23,9 +23,9 @@
 //! `new_scaled_debt`) rather than predicted up front. Full repayment, a full close, and a
 //! remainder whose haircutted USD is zero (unpriceable leftover, or priceable leftover that
 //! truncates to $0) are exempt from that health check — residual debt against a zero-value
-//! bag is booked as bad debt in the same tx. Only a non-zero attached amount is required at
-//! the funds check. Cancelling all scaled debt requires the ceiled payoff, whether or not the
-//! collateral map empties.
+//! bag is booked as bad debt in the same tx. The attached amount must reduce scaled debt;
+//! sub-index repayments are rejected before collateral can be seized. Cancelling all scaled
+//! debt requires the ceiled payoff, whether or not the collateral map empties.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -194,6 +194,10 @@ pub fn liquidate(
     } else {
         underlying_to_scaled_borrow(actual_repay_underlying, reserve.borrow_index)?
     };
+    ensure!(
+        scaled_repay > 0,
+        illegal_argument("Repay amount too small to reduce debt")
+    );
     let new_scaled_debt = scaled_debt
         .checked_sub(scaled_repay)
         .ok_or_else(|| illegal_state("scaled debt underflow"))?;

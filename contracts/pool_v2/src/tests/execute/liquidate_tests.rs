@@ -19,6 +19,7 @@ use crate::model::{
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{
     get_borrower_collateral, get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow,
+    set_reserve_state_v1,
 };
 use crate::tests::fixtures::{oracle_price_expired_for, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
@@ -315,6 +316,47 @@ fn setup_priced_dust_borrower(
     prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.0005"));
     set_oracle_prices(&mut deps.querier, prices);
     (deps, env)
+}
+
+#[test]
+fn liquidate_rejects_amount_that_does_not_reduce_scaled_debt() {
+    let (mut deps, env, _, _) = setup_liquidatable_borrower();
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.borrow_index = Decimal256::from_str("1.05").unwrap();
+    reserve.last_updated_at = env.block.time;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+
+    let scaled_before = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let collateral_before = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_min(),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("too small to reduce debt"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        scaled_before
+    );
+    assert_eq!(
+        get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap(),
+        collateral_before
+    );
 }
 
 #[test]
