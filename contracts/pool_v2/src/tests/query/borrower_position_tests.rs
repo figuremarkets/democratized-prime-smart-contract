@@ -7,7 +7,7 @@ use crate::msg::QueryMsg;
 use crate::storage::{
     get_reserve_state_v1, set_borrower_collateral, set_reserve_state_v1, set_scaled_borrow,
 };
-use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
+use crate::tests::fixtures::{fresh_oracle_price, oracle_price_expired_for, stale_oracle_price};
 use crate::tests::query::common::{setup_instantiated, ORACLE, SOME_USER};
 use cosmwasm_std::{
     from_json, to_json_binary, ContractResult, Decimal256, QuerierResult, SystemError,
@@ -73,7 +73,13 @@ fn get_borrower_position_zero_when_no_borrow() {
     assert_eq!(res["collateral_value_usd"].as_str(), Some("0"));
     assert_eq!(res["loan_to_value"].as_str(), Some("0"));
     assert_eq!(res["health"].as_str(), Some("healthy"));
+    assert_eq!(res["liquidation_ltv"].as_str(), Some("0"));
+    assert_eq!(res["liquidation_health"].as_str(), Some("healthy"));
     assert!(res["unpriceable_collateral"].as_array().unwrap().is_empty());
+    assert!(res["liquidation_unpriceable_collateral"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -106,7 +112,13 @@ fn get_borrower_position_returns_scaled_and_underlying() {
     assert_eq!(res["underlying_debt_display"].as_str(), Some("1.050000"));
     assert!(res["collateral"].as_array().unwrap().is_empty());
     assert_eq!(res["health"].as_str(), Some("no_collateral"));
+    assert_eq!(res["liquidation_ltv"].as_str(), Some("0"));
+    assert_eq!(res["liquidation_health"].as_str(), Some("no_collateral"));
     assert!(res["unpriceable_collateral"].as_array().unwrap().is_empty());
+    assert!(res["liquidation_unpriceable_collateral"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -225,5 +237,109 @@ fn get_borrower_position_lists_unpriceable_collateral_omitted_from_usd() {
     // asset.two at $1, not in supported list → haircut 100%; 10 units = $10.
     assert_eq!(res["collateral_value_usd"].as_str(), Some("10"));
     assert_eq!(res["health"].as_str(), Some("healthy"));
+    assert_eq!(res["loan_to_value"].as_str(), Some("0"));
+    assert_eq!(res["liquidation_health"].as_str(), Some("healthy"));
+    assert_eq!(res["liquidation_ltv"].as_str(), Some("0"));
+    // Stale-within-grace: borrow-side unpriceable, still seizeable for Liquidate.
+    assert!(res["liquidation_unpriceable_collateral"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(res["health_unknown_reason"].is_null());
+}
+
+/// Stale-but-within-grace collateral is omitted from borrow-side LTV (same as Borrow) and
+/// kept for liquidation LTV (same as Liquidate).
+#[test]
+fn get_borrower_position_liquidation_ltv_keeps_stale_collateral_within_grace() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = std::collections::BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1000u128);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .expect("set borrower collateral");
+    set_scaled_borrow(deps.as_mut().storage, SOME_USER, 600u128).expect("set scaled borrow");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetBorrowerPosition {
+            address: SOME_USER.to_string(),
+        },
+    )
+    .expect("query should succeed");
+    let res: serde_json::Value = from_json(bin).expect("decode GetBorrowerPosition response");
+
+    assert_eq!(res["unpriceable_collateral"].as_array().unwrap().len(), 1);
+    assert_eq!(res["unpriceable_collateral"][0].as_str(), Some("asset.one"));
+    assert!(res["liquidation_unpriceable_collateral"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(res["collateral_value_usd"].as_str(), Some("0"));
+    assert_eq!(res["loan_to_value"].as_str(), Some("1"));
+    assert_eq!(res["health"].as_str(), Some("liquidatable"));
+    // 600 debt / (1000 × $1 × 80% haircut) = 0.75, at or below margin 0.80.
+    assert_eq!(res["liquidation_ltv"].as_str(), Some("0.75"));
+    assert_eq!(res["liquidation_health"].as_str(), Some("healthy"));
+}
+
+/// Past the liquidation last-known bound, both views omit the collateral.
+#[test]
+fn get_borrower_position_liquidation_ltv_drops_collateral_past_grace() {
+    let (mut deps, env) = setup_instantiated();
+    let mut amounts = std::collections::BTreeMap::new();
+    amounts.insert("asset.one".to_string(), 1000u128);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .expect("set borrower collateral");
+    set_scaled_borrow(deps.as_mut().storage, SOME_USER, 600u128).expect("set scaled borrow");
+
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        oracle_price_expired_for(Decimal256::one(), env.block.time, 3600),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetBorrowerPosition {
+            address: SOME_USER.to_string(),
+        },
+    )
+    .expect("query should succeed");
+    let res: serde_json::Value = from_json(bin).expect("decode GetBorrowerPosition response");
+
+    assert_eq!(res["loan_to_value"].as_str(), Some("1"));
+    assert_eq!(res["health"].as_str(), Some("liquidatable"));
+    assert_eq!(res["liquidation_ltv"].as_str(), Some("1"));
+    assert_eq!(res["liquidation_health"].as_str(), Some("liquidatable"));
+    let liq_unpriceable = res["liquidation_unpriceable_collateral"]
+        .as_array()
+        .unwrap();
+    assert_eq!(liq_unpriceable.len(), 1);
+    assert_eq!(liq_unpriceable[0].as_str(), Some("asset.one"));
 }

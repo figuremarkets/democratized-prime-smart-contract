@@ -15,8 +15,10 @@ pub enum QueryMsg {
     /// Current reserve state (indexes, totals, utilization) plus live APRs (see `ReserveResponseV1`).
     #[returns(ReserveResponseV1)]
     GetReserve {},
-    /// Borrower position: debt, collateral amounts, collateral value (USD), LTV, health, and
-    /// held denoms omitted from that USD total (`unpriceable_collateral`).
+    /// Borrower position: debt, collateral amounts, collateral value (USD), borrow-side LTV/health
+    /// (fresh prices), liquidation LTV/health (last-known within the liquidation bound), held denoms
+    /// omitted from the borrow-side USD total (`unpriceable_collateral`), and held denoms omitted
+    /// from liquidation LTV/seizure (`liquidation_unpriceable_collateral`).
     #[returns(BorrowerPositionResponseV1)]
     GetBorrowerPosition { address: String },
     /// Collateral required for a given loan amount (for UI). Per-asset `required` entries
