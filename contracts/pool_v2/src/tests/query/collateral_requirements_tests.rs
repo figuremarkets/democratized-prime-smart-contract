@@ -18,6 +18,7 @@ use cosmwasm_std::{Decimal256, Uint128};
 use democratized_prime_lib::price_oracle::model::AssetPriceResponseV1;
 use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use std::collections::{BTreeMap, HashMap};
+use std::str::FromStr;
 
 fn set_oracle_prices(
     deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
@@ -581,4 +582,133 @@ fn get_collateral_requirements_cheap_18_decimal_asset_returns_zero_amount() {
     assert_eq!(required[0]["asset_id"], "asset.one");
     assert_eq!(required[0]["amount"], "0");
     assert_eq!(required[0]["satisfiable"], false);
+}
+
+#[allow(deprecated)]
+fn priced_asset(
+    display: Decimal256,
+    precision: u32,
+    at: cosmwasm_std::Timestamp,
+) -> AssetPriceResponseV1 {
+    let s = at.seconds();
+    AssetPriceResponseV1 {
+        price_usd: Decimal256::zero(),
+        display_price_usd: display,
+        precision,
+        as_of_epoch_second: s,
+        expiration_epoch_seconds: s.saturating_add(1),
+    }
+}
+
+/// Quote `asset.one` (80% haircut in `default_instantiate_msg`) at the given display/precision,
+/// returning the quoted amount alongside the required USD it has to cover.
+fn quote_asset_one(
+    display: Decimal256,
+    precision: u32,
+    new_loan_amount: u128,
+) -> (u128, Decimal256) {
+    let (mut deps, env) = setup_instantiated();
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        priced_asset(display, precision, env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let bin = query(
+        deps.as_ref(),
+        env,
+        QueryMsg::GetCollateralRequirements {
+            borrower: None,
+            new_loan_amount: Uint128::new(new_loan_amount),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("query should succeed");
+    let resp: CollateralRequirementsResponseV1 = from_json(bin).unwrap();
+    assert!(resp.required[0].satisfiable);
+    let required_usd = Decimal256::from_str(&resp.required_collateral_value_usd).unwrap();
+    (resp.required[0].amount.u128(), required_usd)
+}
+
+/// The quote must cover the requirement as the health check computes it (truncated `value_usd`,
+/// then truncated `× haircut`), and one base unit less must not — so no collateral is wasted.
+fn assert_quote_is_exactly_minimal(
+    display: Decimal256,
+    precision: u32,
+    amount: u128,
+    required_usd: Decimal256,
+) {
+    let haircut = Decimal256::percent(80);
+    let at = cosmwasm_std::Timestamp::from_seconds(0);
+    let price = priced_asset(display, precision, at);
+    let covered = |units: u128| {
+        price
+            .value_usd(units)
+            .unwrap()
+            .checked_mul(haircut)
+            .unwrap()
+    };
+    assert!(
+        amount > 0,
+        "a positive requirement must quote a positive amount"
+    );
+    assert!(
+        covered(amount) >= required_usd,
+        "quoted {} haircutted to {} must cover {}",
+        amount,
+        covered(amount),
+        required_usd
+    );
+    assert!(
+        covered(amount - 1) < required_usd,
+        "quote {} is not minimal: {} already covers {}",
+        amount,
+        amount - 1,
+        required_usd
+    );
+}
+
+/// 18-decimal collateral: dividing by the haircut then ceiling `amount_from_usd` under-quotes,
+/// because `value_usd` truncates too. The query must return an amount whose truncated
+/// haircutted `value_usd` covers the requirement, so a Borrow sized off the quote cannot revert.
+#[test]
+fn get_collateral_requirements_18_decimal_quote_covers_haircutted_requirement() {
+    let display = Decimal256::from_ratio(3u128, 17u128);
+    let (amount, required_usd) = quote_asset_one(display, 18, 1000);
+    assert_quote_is_exactly_minimal(display, 18, amount, required_usd);
+}
+
+/// Cheap 18-decimal asset: one base unit is worth 1e-22 USD, far below one `Decimal256`
+/// atomic, so a shortfall takes thousands of base units to close rather than one.
+#[test]
+fn get_collateral_requirements_cheap_18_decimal_quote_covers_haircutted_requirement() {
+    let display = Decimal256::from_str("0.0001").unwrap();
+    let (amount, required_usd) = quote_asset_one(display, 18, 1_000_000);
+    assert_quote_is_exactly_minimal(display, 18, amount, required_usd);
+}
+
+/// The two-bump regime: a normally priced 18-decimal asset, not the cheap extreme.
+#[test]
+fn get_collateral_requirements_18_decimal_two_bump_quote_covers_haircutted_requirement() {
+    let display = Decimal256::from_str("0.355").unwrap();
+    let (amount, required_usd) = quote_asset_one(display, 18, 1_000_003);
+    assert_quote_is_exactly_minimal(display, 18, amount, required_usd);
+}
+
+/// Production collateral is 6 and 9 decimals, where the defect is unreachable. Quotes there
+/// must be unchanged, so the closed form is not a behaviour change for live assets.
+#[test]
+fn get_collateral_requirements_six_decimal_quote_is_unchanged() {
+    let display = Decimal256::one();
+    let (amount, required_usd) = quote_asset_one(display, 6, 1000);
+    assert_eq!(
+        amount, 1_562_500_000,
+        "6-decimal quote must match the pre-existing value"
+    );
+    assert_quote_is_exactly_minimal(display, 6, amount, required_usd);
 }

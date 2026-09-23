@@ -13,9 +13,10 @@
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
 //! A remainder worth **$0** after the seizure (empty map, or leftover with no haircutted USD)
-//! waives only the 100% floor; the bonus cap still applies, so a 1-atom repay can empty only a
-//! dust bag. Residual debt against that remainder is booked in the same transaction via
-//! `bad_debt_loss_allocation`.
+//! waives only the 100% floor; the bonus cap still applies, so a repay that actually reduces
+//! scaled debt can empty only a dust bag. A 1-atom repay is rejected once `borrow_index > 1`,
+//! because it floors to zero scaled units. Residual debt against that remainder is booked
+//! in the same transaction via `bad_debt_loss_allocation`.
 //!
 //! **How much must be repaid:** there is no closed-form minimum. Actual repay is
 //! `min(sent, ceil(scaled × borrow_index))`. The repay plus seizure must leave the borrower
