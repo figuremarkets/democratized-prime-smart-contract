@@ -132,8 +132,9 @@ pub fn query_collateral_requirements(
                 AssetRequirementV1::unquotable(asset_id.clone())
             }
             Some(price) => {
-                // One fused ceil over display × haircut, then a one-unit bump if truncated
-                // value_usd × haircut is still short of value_to_cover (18-decimal assets).
+                // Closed-form least units whose truncated haircutted value_usd covers
+                // value_to_cover. A one-unit bump after value/haircut is not enough on
+                // 18-decimal assets; see amount_from_usd_haircutted.
                 match price.amount_from_usd_haircutted(value_to_cover, haircut) {
                     Ok(amt) => AssetRequirementV1::quoted(asset_id.clone(), Uint128::from(amt)),
                     // Cheap high-precision asset: required base units do not fit u128.
