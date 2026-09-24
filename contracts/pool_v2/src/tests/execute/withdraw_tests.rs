@@ -82,6 +82,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: OWNER.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -541,6 +542,7 @@ fn withdraw_fails_when_require_commit_on_exit_and_commit_funds_not_true() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -601,6 +603,7 @@ fn withdraw_exact_fails_when_require_commit_on_exit_and_commit_funds_not_true() 
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -657,6 +660,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -1320,6 +1324,7 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");

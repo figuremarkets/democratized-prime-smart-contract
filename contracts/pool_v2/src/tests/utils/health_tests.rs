@@ -5,7 +5,7 @@ use crate::model::contract_state::ContractStateV1;
 use crate::model::error::ContractError;
 use crate::model::health::BorrowerHealthV1;
 use crate::model::{Denom, OperationalState, RateParamsV1};
-use crate::tests::query::common::CUSTODIAN;
+use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::utils::{
     calculate_borrow_value_usd, calculate_ltv, calculate_total_collateral_value_usd,
     get_borrower_health, get_health_from_ltv, validate_borrower_is_healthy,
@@ -44,6 +44,7 @@ fn contract_state(margin_rate: &str, liquidation_rate: &str) -> ContractStateV1 
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: Some(Addr::unchecked(CUSTODIAN)),
+        liquidator: Some(Addr::unchecked(OWNER)),
         max_liquidation_staleness_seconds: 3600,
         liquidation_access: Default::default(),
     }

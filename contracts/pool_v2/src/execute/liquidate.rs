@@ -1,7 +1,7 @@
 //! # Liquidation
 //!
 //! Liquidates a borrower whose LTV is at or above the liquidation rate. Auth follows
-//! [`crate::model::LiquidationAccess`]: owner-only by default, or any sender when the
+//! [`crate::model::LiquidationAccess`]: liquidator-only by default, or any sender when the
 //! custodian has set **permissionless** and the position is liquidatable even after
 //! counting unpriceable holdings at their retained last-known (too-old, non-zero) quotes.
 //! A dropped feed with **no** stored quote, or a last-known that would pull LTV back
@@ -66,10 +66,11 @@ use crate::storage::{
     set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
 };
 use crate::utils::{
-    apply_pro_rata_liquidity_index_haircut, calculate_total_collateral_value_usd,
-    format_as_percent_string, get_asset_prices_for_liquidation, get_borrower_health,
-    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow,
-    update_reserve_indexes, validate_single_coin_denom, LiquidationPrices, WithRates,
+    apply_pro_rata_liquidity_index_haircut, assert_liquidator,
+    calculate_total_collateral_value_usd, format_as_percent_string,
+    get_asset_prices_for_liquidation, get_borrower_health, scaled_to_underlying_borrow,
+    scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow, update_reserve_indexes,
+    validate_single_coin_denom, LiquidationPrices, WithRates,
 };
 use cosmwasm_std::{
     ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
@@ -78,7 +79,7 @@ use democratized_prime_lib::common::assert_owner;
 use std::collections::{BTreeMap, HashSet};
 
 pub const ACTION: &str = "liquidate";
-pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may liquidate";
+pub const ASSERT_LIQUIDATOR_ERR: &str = "Only the contract liquidator may liquidate";
 pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
     "Only the contract owner may liquidate when unpriceable collateral is load-bearing";
 
@@ -101,8 +102,11 @@ pub fn liquidate(
     let contract = get_contract_state_v1(deps.storage)?;
 
     // ---------- 1. Auth and borrower identity ----------
-    if matches!(contract.liquidation_access, LiquidationAccess::OwnerOnly) {
-        assert_owner(deps.storage, &info.sender, ASSERT_OWNER_ERR)?;
+    if matches!(
+        contract.liquidation_access,
+        LiquidationAccess::LiquidatorOnly
+    ) {
+        assert_liquidator(&contract, &info.sender, ASSERT_LIQUIDATOR_ERR)?;
     }
     let borrower_addr = deps.api.addr_validate(borrower.trim())?;
     let borrower_key = borrower_addr.as_str();

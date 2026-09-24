@@ -59,6 +59,7 @@ fn set_lender_require_commit_custodian_succeeds_and_persists() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -127,6 +128,7 @@ fn set_lender_require_commit_for_custodian_fails() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .unwrap();
@@ -166,6 +168,7 @@ fn set_lender_require_commit_owner_fails() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -205,6 +208,7 @@ fn set_lender_require_commit_fails_with_funds() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -244,6 +248,7 @@ fn set_lender_require_commit_none_removes_override() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");

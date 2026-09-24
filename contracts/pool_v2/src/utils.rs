@@ -12,7 +12,7 @@ pub use health::{
     get_borrower_health, get_health_from_ltv, validate_borrower_is_healthy,
 };
 pub use math::{format_as_percent_string, uint128_to_decimal256};
-pub use permission::{assert_custodian, assert_owner_or_custodian};
+pub use permission::{assert_custodian, assert_liquidator, assert_owner_or_custodian};
 pub use price::{
     drop_unpriceable_collateral, get_asset_prices_for_borrower, get_asset_prices_for_liquidation,
     get_price_from_oracle, require_fresh_asset_prices, LiquidationPrices,

@@ -65,7 +65,7 @@ pub enum ExecuteMsg {
         to_remove: BTreeMap<String, Uint128>,
     },
 
-    /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
+    /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default liquidator-only).
     /// Permissionless still requires the owner when unpriceable collateral is load-bearing.
     /// Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is
     /// `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in
@@ -126,9 +126,11 @@ pub enum ExecuteMsg {
         bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
         /// If provided, custodianship will be transferred to the given account.
         custodian: Option<String>,
+        /// If provided, changes the account authorized for restricted liquidations.
+        liquidator: Option<String>,
         /// Seconds past oracle expiration after which a stored price is unpriceable for
         /// liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be
-        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (owner-only) or
+        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (liquidator-only) or
         /// [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).
         #[serde(default)]
         max_liquidation_staleness_seconds: Option<u64>,

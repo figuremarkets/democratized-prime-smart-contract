@@ -1,4 +1,4 @@
-//! Tests for Liquidate execute: auth follows liquidation_access (default owner-only;
+//! Tests for Liquidate execute: auth follows liquidation_access (default liquidator-only;
 //! permissionless still requires the owner when unpriceable collateral is load-bearing),
 //! borrower must be liquidatable, the post-state must land at or below margin_rate (no
 //! precomputed minimum repay), 2% collateral bonus.
@@ -8,7 +8,7 @@ use crate::constants::{
     ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::contract::execute;
-use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
+use crate::execute::liquidate::{ACTION, ASSERT_LIQUIDATOR_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::health::BorrowerHealthV1;
@@ -114,6 +114,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: OWNER.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -335,7 +336,7 @@ fn liquidate_non_owner_fails() {
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
     ));
 }
 
@@ -360,7 +361,91 @@ fn liquidate_for_custodian_fails() {
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
+    ));
+}
+
+const DEDICATED_LIQUIDATOR: &str = "tp1lfglp38atk7gv3z4pg4d3a6m62ma59x6tfwv9p";
+
+fn set_liquidator(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: Env,
+    liquidator: &str,
+) {
+    execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: Default::default(),
+            custodian: None,
+            liquidator: Some(liquidator.to_owned()),
+        },
+    )
+    .expect("custodian can set liquidator");
+}
+
+#[test]
+fn liquidate_restricted_configured_liquidator_succeeds_owner_and_unrelated_fail() {
+    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+    set_liquidator(&mut deps, env.clone(), DEDICATED_LIQUIDATOR);
+    let min_repay = 374u128;
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(DEDICATED_LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("configured liquidator may liquidate when access is restricted");
+
+    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+    set_liquidator(&mut deps, env.clone(), DEDICATED_LIQUIDATOR);
+
+    let owner_err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        owner_err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
+    ));
+
+    let unrelated_err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        unrelated_err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
     ));
 }
 
@@ -388,9 +473,10 @@ fn set_liquidation_access(
                 LiquidationAccess::Permissionless => {
                     Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut)
                 }
-                LiquidationAccess::OwnerOnly => None,
+                LiquidationAccess::LiquidatorOnly => None,
             },
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("custodian can set liquidation_access");

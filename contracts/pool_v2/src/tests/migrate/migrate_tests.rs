@@ -1,4 +1,6 @@
-use crate::constants::{ATTRIBUTE_CUSTODIAN, CONTRACT_NAME, CONTRACT_VERSION};
+use crate::constants::{
+    ATTRIBUTE_CUSTODIAN, ATTRIBUTE_LIQUIDATOR, CONTRACT_NAME, CONTRACT_VERSION,
+};
 use crate::contract::{migrate, ASSERT_CUSTODIAN_ERR};
 use crate::model::error::illegal_argument;
 use crate::model::ContractStateV1;
@@ -319,15 +321,85 @@ fn migration_proceeds_when_custodian_is_specified() {
     )
     .unwrap();
 
+    // Verify the custodian and liquidator were updated:
+    let state: ContractStateV1 = get_contract_state_v1(deps.as_mut().storage).unwrap();
+    assert_eq!(state.custodian, Some(Addr::unchecked(CUSTODIAN)));
+    assert_eq!(state.liquidator, Some(Addr::unchecked(OWNER)));
     assert_eq!(
         res.attributes,
         vec![
             Attribute::new(ATTRIBUTE_ACTION_NAME, MIGRATE_ACTION),
-            Attribute::new(ATTRIBUTE_CUSTODIAN, CUSTODIAN)
+            Attribute::new(ATTRIBUTE_CUSTODIAN, CUSTODIAN),
+            Attribute::new(ATTRIBUTE_LIQUIDATOR, OWNER),
         ]
     );
+}
 
-    // Verify the custodian was updated:
-    let state: ContractStateV1 = get_contract_state_v1(deps.as_mut().storage).unwrap();
-    assert_eq!(state.custodian, Some(Addr::unchecked(CUSTODIAN)));
+#[test]
+fn migration_missing_liquidator_backfills_current_owner_and_preserves_config() {
+    let (mut deps, _env) = setup_instantiated_contract();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let mut state_json = serde_json::to_value(&before).unwrap();
+    state_json
+        .as_object_mut()
+        .expect("contract state serializes to a JSON object")
+        .remove("lqr");
+    deps.as_mut().storage.set(
+        contract_state_key().as_bytes(),
+        &serde_json::to_vec(&state_json).unwrap(),
+    );
+
+    set_contract_version(
+        deps.as_mut().storage,
+        CONTRACT_NAME,
+        PREVIOUS_CONTRACT_VERSION,
+    )
+    .unwrap();
+
+    let res = migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None })
+        .expect("migrate should backfill missing liquidator");
+
+    assert!(res
+        .attributes
+        .iter()
+        .any(|a| a.key == ATTRIBUTE_LIQUIDATOR && a.value == OWNER));
+
+    let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.liquidator, Some(Addr::unchecked(OWNER)));
+    assert_eq!(after.custodian, before.custodian);
+    assert_eq!(after.contract_name, before.contract_name);
+    assert_eq!(after.margin_rate, before.margin_rate);
+    assert_eq!(after.liquidation_rate, before.liquidation_rate);
+    assert_eq!(after.liquidation_bonus_rate, before.liquidation_bonus_rate);
+    assert_eq!(after.liquidation_access, before.liquidation_access);
+    assert_eq!(
+        after.max_liquidation_staleness_seconds,
+        before.max_liquidation_staleness_seconds
+    );
+    assert_eq!(
+        after.bad_debt_loss_allocation,
+        before.bad_debt_loss_allocation
+    );
+    assert_eq!(after.rate_params, before.rate_params);
+}
+
+#[test]
+fn migration_preserves_existing_liquidator() {
+    let (mut deps, _env) = setup_instantiated_contract();
+    let mut state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    state.liquidator = Some(Addr::unchecked(NEW_CUSTODIAN));
+    set_contract_state_v1(deps.as_mut().storage, &state).unwrap();
+
+    set_contract_version(
+        deps.as_mut().storage,
+        CONTRACT_NAME,
+        PREVIOUS_CONTRACT_VERSION,
+    )
+    .unwrap();
+
+    migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None }).unwrap();
+
+    let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.liquidator, Some(Addr::unchecked(NEW_CUSTODIAN)));
+    assert_eq!(after.custodian, Some(Addr::unchecked(CUSTODIAN)));
 }

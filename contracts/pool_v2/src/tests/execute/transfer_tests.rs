@@ -69,6 +69,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: OWNER.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -583,6 +584,7 @@ fn transfer_fails_when_require_commit_on_exit() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");

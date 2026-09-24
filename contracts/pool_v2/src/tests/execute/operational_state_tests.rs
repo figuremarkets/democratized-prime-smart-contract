@@ -411,6 +411,7 @@ fn paused_allows_custodian_config_messages() {
             commit_market_id: None,
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .unwrap();

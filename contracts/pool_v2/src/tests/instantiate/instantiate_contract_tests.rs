@@ -62,6 +62,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: OWNER.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -390,6 +391,24 @@ fn instantiate_stores_custodian_in_state() {
 }
 
 #[test]
+fn instantiate_stores_liquidator_in_state() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let msg = default_instantiate_msg();
+
+    instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate should succeed");
+
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(state.liquidator, Some(Addr::unchecked(OWNER)));
+}
+
+#[test]
 fn instantiate_fails_empty_custodian() {
     let mut deps = mock_provenance_dependencies();
     deps.api = deps.api.with_prefix("tp");
@@ -413,6 +432,63 @@ fn instantiate_fails_invalid_custodian() {
     deps.api = deps.api.with_prefix("tp");
     let mut msg = default_instantiate_msg();
     msg.custodian = "not_a_valid_address".to_string();
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
+}
+
+#[test]
+fn instantiate_stores_explicit_liquidator_in_state() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidator = CUSTODIAN.to_owned();
+
+    instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate should succeed");
+
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(state.liquidator, Some(Addr::unchecked(CUSTODIAN)));
+    let ownership = get_ownership(deps.as_ref().storage).unwrap();
+    assert_eq!(ownership.owner, Some(Addr::unchecked(OWNER)));
+}
+
+#[test]
+fn instantiate_fails_empty_liquidator() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidator = "   ".to_string();
+
+    let err = instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
+}
+
+#[test]
+fn instantiate_fails_invalid_liquidator() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.liquidator = "not_a_valid_address".to_string();
 
     let err = instantiate_contract(
         deps.as_mut(),

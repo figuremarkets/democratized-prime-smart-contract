@@ -1,14 +1,14 @@
-//! Unit tests for pool_v2 utils/custodian.rs.
+//! Unit tests for [`crate::utils::assert_liquidator`].
 
 use crate::model::contract_state::ContractStateV1;
 use crate::model::error::ContractError;
 use crate::model::{Denom, OperationalState, RateParamsV1};
-use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
-use crate::utils::assert_custodian;
+use crate::tests::query::common::{OWNER, SOME_USER};
+use crate::utils::assert_liquidator;
 use cosmwasm_std::{Addr, Decimal256, Uint128};
 use std::str::FromStr;
 
-fn contract_state_with_custodian(custodian: Option<&str>) -> ContractStateV1 {
+fn contract_state_with_liquidator(liquidator: Option<&str>) -> ContractStateV1 {
     ContractStateV1 {
         contract_name: "test".to_string(),
         description: "".to_string(),
@@ -37,52 +37,44 @@ fn contract_state_with_custodian(custodian: Option<&str>) -> ContractStateV1 {
         operational_state: OperationalState::Active,
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
-        custodian: custodian.map(Addr::unchecked),
-        liquidator: Some(Addr::unchecked(OWNER)),
+        custodian: Some(Addr::unchecked(OWNER)),
+        liquidator: liquidator.map(Addr::unchecked),
         max_liquidation_staleness_seconds: 3600,
         liquidation_access: Default::default(),
     }
 }
 
 #[test]
-fn assert_custodian_succeeds_for_custodian_sender() {
-    let state = contract_state_with_custodian(Some(CUSTODIAN));
-    assert_custodian(
-        &state,
-        &Addr::unchecked(CUSTODIAN),
-        "only custodian allowed",
-    )
-    .expect("custodian sender should pass");
+fn assert_liquidator_succeeds_for_liquidator_sender() {
+    let state = contract_state_with_liquidator(Some(OWNER));
+    assert_liquidator(&state, &Addr::unchecked(OWNER), "only liquidator allowed")
+        .expect("liquidator sender should pass");
 }
 
 #[test]
-fn assert_custodian_fails_for_non_custodian_sender() {
-    let state = contract_state_with_custodian(Some(CUSTODIAN));
-    let err = assert_custodian(
+fn assert_liquidator_fails_for_non_liquidator_sender() {
+    let state = contract_state_with_liquidator(Some(OWNER));
+    let err = assert_liquidator(
         &state,
         &Addr::unchecked(SOME_USER),
-        "only custodian allowed",
+        "only liquidator allowed",
     )
     .unwrap_err();
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == "only custodian allowed"
+        ContractError::NotAuthorizedError { message } if message == "only liquidator allowed"
     ));
 }
 
 #[test]
-fn assert_custodian_fails_when_custodian_unset() {
-    let state = contract_state_with_custodian(None);
-    let err = assert_custodian(
-        &state,
-        &Addr::unchecked(CUSTODIAN),
-        "only custodian allowed",
-    )
-    .unwrap_err();
+fn assert_liquidator_fails_when_liquidator_unset() {
+    let state = contract_state_with_liquidator(None);
+    let err =
+        assert_liquidator(&state, &Addr::unchecked(OWNER), "only liquidator allowed").unwrap_err();
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == "contract custodian not set"
+        ContractError::NotAuthorizedError { message } if message == "contract liquidator not set"
     ));
 }
