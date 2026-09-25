@@ -25,7 +25,7 @@ use crate::model::error::{illegal_state, ContractError};
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_reserve_state_v1, get_scaled_borrow};
-use crate::tests::query::common::{CUSTODIAN, OWNER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::utils::{
     compute_effective_reserve, reserve_totals_and_cash_u128, scaled_to_underlying_borrow_ceil,
     scaled_to_underlying_liquidity,
@@ -118,7 +118,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

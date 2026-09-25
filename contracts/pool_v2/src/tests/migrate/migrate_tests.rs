@@ -7,7 +7,9 @@ use crate::model::ContractStateV1;
 use crate::msg::MigrateMsg;
 use crate::storage::contract_state_key;
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
-use crate::tests::instantiate_helpers::{setup_instantiated_contract, CUSTODIAN, OWNER};
+use crate::tests::instantiate_helpers::{
+    setup_instantiated_contract, CUSTODIAN, LIQUIDATOR, OWNER,
+};
 use cosmwasm_std::testing::{mock_env, MockApi};
 use cosmwasm_std::{Addr, Attribute, DepsMut};
 use cw2::{get_contract_version, set_contract_version};
@@ -111,8 +113,15 @@ fn migration_succeeds_with_legacy_admin_field_when_cw_ownable_missing() {
     )
     .unwrap();
 
-    migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None })
-        .expect("migrate should initialize owner from legacy flattened-state admin field");
+    migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    )
+    .expect("migrate should initialize owner from legacy flattened-state admin field");
 
     let ownership = get_ownership(deps.as_ref().storage).unwrap();
     assert_eq!(
@@ -135,7 +144,14 @@ fn migration_fails_custodian_if_contract_custodian_is_not_currently_set() {
     simulate_legacy_contract(deps.as_mut(), api).unwrap();
 
     // Attempt the migration - no custodian
-    let res = migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None });
+    let res = migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    );
 
     assert_eq!(res, Err(illegal_argument(ASSERT_CUSTODIAN_ERR)));
 
@@ -161,6 +177,7 @@ fn migration_fails_whitespace_only_custodian() {
         mock_env(),
         MigrateMsg {
             custodian: Some("   ".to_owned()),
+            liquidator: None,
         },
     )
     .unwrap_err();
@@ -187,7 +204,15 @@ fn migration_succeeds_when_custodian_already_set() {
     .unwrap();
 
     // The migration should succeed when custodian already set:
-    migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None }).unwrap();
+    migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    )
+    .unwrap();
 
     let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(state.custodian, Some(Addr::unchecked(CUSTODIAN)));
@@ -213,6 +238,7 @@ fn migration_overwrites_existing_custodian() {
         mock_env(),
         MigrateMsg {
             custodian: Some(NEW_CUSTODIAN.to_owned()),
+            liquidator: None,
         },
     )
     .unwrap();
@@ -242,6 +268,7 @@ fn migration_fails_invalid_custodian_address() {
         mock_env(),
         MigrateMsg {
             custodian: Some("not_a_valid_address".to_owned()),
+            liquidator: None,
         },
     )
     .unwrap_err();
@@ -280,8 +307,15 @@ fn migration_legacy_admin_preserves_existing_custodian_without_msg() {
     )
     .unwrap();
 
-    migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None })
-        .expect("migrate with existing custodian should succeed");
+    migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    )
+    .expect("migrate with existing custodian should succeed");
 
     let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(state.custodian, Some(Addr::unchecked(CUSTODIAN)));
@@ -301,6 +335,15 @@ fn migrate_msg_json_deserializes_custodian() {
 
     let empty: MigrateMsg = serde_json::from_str("{}").expect("deserialize empty MigrateMsg");
     assert_eq!(empty.custodian, None);
+    assert_eq!(empty.liquidator, None);
+}
+
+#[test]
+fn migrate_msg_json_deserializes_liquidator() {
+    let msg: MigrateMsg = serde_json::from_str(&format!(r#"{{"liquidator":"{LIQUIDATOR}"}}"#))
+        .expect("deserialize MigrateMsg");
+    assert_eq!(msg.liquidator, Some(LIQUIDATOR.to_owned()));
+    assert_eq!(msg.custodian, None);
 }
 
 #[test]
@@ -317,6 +360,7 @@ fn migration_proceeds_when_custodian_is_specified() {
         mock_env(),
         MigrateMsg {
             custodian: Some(CUSTODIAN.to_owned()),
+            liquidator: None,
         },
     )
     .unwrap();
@@ -356,8 +400,15 @@ fn migration_missing_liquidator_backfills_current_owner_and_preserves_config() {
     )
     .unwrap();
 
-    let res = migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None })
-        .expect("migrate should backfill missing liquidator");
+    let res = migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    )
+    .expect("migrate should backfill missing liquidator");
 
     assert!(res
         .attributes
@@ -386,9 +437,9 @@ fn migration_missing_liquidator_backfills_current_owner_and_preserves_config() {
 #[test]
 fn migration_preserves_existing_liquidator() {
     let (mut deps, _env) = setup_instantiated_contract();
-    let mut state = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    state.liquidator = Some(Addr::unchecked(NEW_CUSTODIAN));
-    set_contract_state_v1(deps.as_mut().storage, &state).unwrap();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(before.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
+    assert_ne!(LIQUIDATOR, OWNER);
 
     set_contract_version(
         deps.as_mut().storage,
@@ -397,9 +448,129 @@ fn migration_preserves_existing_liquidator() {
     )
     .unwrap();
 
-    migrate(deps.as_mut(), mock_env(), MigrateMsg { custodian: None }).unwrap();
+    migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    )
+    .unwrap();
+
+    let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
+    assert_eq!(after.custodian, Some(Addr::unchecked(CUSTODIAN)));
+}
+
+#[test]
+fn migration_msg_liquidator_sets_address_on_legacy_state() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let api = deps.api;
+    simulate_legacy_contract(deps.as_mut(), api).unwrap();
+
+    let res = migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: Some(CUSTODIAN.to_owned()),
+            liquidator: Some(LIQUIDATOR.to_owned()),
+        },
+    )
+    .unwrap();
+
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(state.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
+    assert_eq!(state.custodian, Some(Addr::unchecked(CUSTODIAN)));
+    assert!(res
+        .attributes
+        .iter()
+        .any(|a| a.key == ATTRIBUTE_LIQUIDATOR && a.value == LIQUIDATOR));
+}
+
+#[test]
+fn migration_overwrites_existing_liquidator() {
+    let (mut deps, _env) = setup_instantiated_contract();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(before.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
+
+    set_contract_version(
+        deps.as_mut().storage,
+        CONTRACT_NAME,
+        PREVIOUS_CONTRACT_VERSION,
+    )
+    .unwrap();
+
+    migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: Some(NEW_CUSTODIAN.to_owned()),
+        },
+    )
+    .unwrap();
 
     let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(after.liquidator, Some(Addr::unchecked(NEW_CUSTODIAN)));
     assert_eq!(after.custodian, Some(Addr::unchecked(CUSTODIAN)));
+}
+
+#[test]
+fn migration_fails_whitespace_only_liquidator() {
+    let (mut deps, _env) = setup_instantiated_contract();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+
+    set_contract_version(
+        deps.as_mut().storage,
+        CONTRACT_NAME,
+        PREVIOUS_CONTRACT_VERSION,
+    )
+    .unwrap();
+
+    let err = migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: Some("   ".to_owned()),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
+    let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.liquidator, before.liquidator);
+    let v = get_contract_version(deps.as_ref().storage).unwrap();
+    assert_eq!(v.version, PREVIOUS_CONTRACT_VERSION);
+}
+
+#[test]
+fn migration_fails_invalid_liquidator_address() {
+    let (mut deps, _env) = setup_instantiated_contract();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+
+    set_contract_version(
+        deps.as_mut().storage,
+        CONTRACT_NAME,
+        PREVIOUS_CONTRACT_VERSION,
+    )
+    .unwrap();
+
+    let err = migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: Some("not_a_valid_address".to_owned()),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)));
+    let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.liquidator, before.liquidator);
+    let v = get_contract_version(deps.as_ref().storage).unwrap();
+    assert_eq!(v.version, PREVIOUS_CONTRACT_VERSION);
 }

@@ -14,7 +14,7 @@ use crate::model::{
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1};
-use crate::tests::query::common::{CUSTODIAN, NEW_CUSTODIAN, OWNER, SOME_USER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, NEW_CUSTODIAN, OWNER, SOME_USER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{coin, Addr, Decimal256, Response, Uint128};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
@@ -61,7 +61,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -1672,7 +1672,7 @@ fn update_contract_config_owner_cannot_update_liquidator() {
     ));
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(contract.liquidator, Some(Addr::unchecked(OWNER)));
+    assert_eq!(contract.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
 }
 
 #[test]
@@ -1707,5 +1707,5 @@ fn update_contract_config_non_custodian_cannot_update_liquidator() {
     ));
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(contract.liquidator, Some(Addr::unchecked(OWNER)));
+    assert_eq!(contract.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
 }

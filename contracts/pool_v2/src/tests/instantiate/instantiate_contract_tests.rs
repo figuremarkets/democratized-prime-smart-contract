@@ -13,7 +13,8 @@ use crate::model::{
 };
 use crate::msg::instantiate::{InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
-use crate::tests::instantiate_helpers::{mock_repo_token_instantiate_reply, CUSTODIAN};
+use crate::tests::instantiate_helpers::{mock_repo_token_instantiate_reply, CUSTODIAN, LIQUIDATOR};
+use crate::tests::query::common::SOME_USER;
 use cosmwasm_std::testing::{message_info, mock_env};
 use cosmwasm_std::{Addr, CosmosMsg, Decimal256, Uint128, WasmMsg};
 use cw2::get_contract_version;
@@ -62,7 +63,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -405,7 +406,7 @@ fn instantiate_stores_liquidator_in_state() {
     .expect("instantiate should succeed");
 
     let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(state.liquidator, Some(Addr::unchecked(OWNER)));
+    assert_eq!(state.liquidator, Some(Addr::unchecked(LIQUIDATOR)));
 }
 
 #[test]
@@ -449,7 +450,7 @@ fn instantiate_stores_explicit_liquidator_in_state() {
     let mut deps = mock_provenance_dependencies();
     deps.api = deps.api.with_prefix("tp");
     let mut msg = default_instantiate_msg();
-    msg.liquidator = CUSTODIAN.to_owned();
+    msg.liquidator = SOME_USER.to_owned();
 
     instantiate_contract(
         deps.as_mut(),
@@ -460,7 +461,7 @@ fn instantiate_stores_explicit_liquidator_in_state() {
     .expect("instantiate should succeed");
 
     let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(state.liquidator, Some(Addr::unchecked(CUSTODIAN)));
+    assert_eq!(state.liquidator, Some(Addr::unchecked(SOME_USER)));
     let ownership = get_ownership(deps.as_ref().storage).unwrap();
     assert_eq!(ownership.owner, Some(Addr::unchecked(OWNER)));
 }

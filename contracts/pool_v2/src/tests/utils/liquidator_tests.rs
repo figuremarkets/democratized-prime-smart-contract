@@ -3,7 +3,7 @@
 use crate::model::contract_state::ContractStateV1;
 use crate::model::error::ContractError;
 use crate::model::{Denom, OperationalState, RateParamsV1};
-use crate::tests::query::common::{OWNER, SOME_USER};
+use crate::tests::query::common::{LIQUIDATOR, OWNER};
 use crate::utils::assert_liquidator;
 use cosmwasm_std::{Addr, Decimal256, Uint128};
 use std::str::FromStr;
@@ -46,20 +46,20 @@ fn contract_state_with_liquidator(liquidator: Option<&str>) -> ContractStateV1 {
 
 #[test]
 fn assert_liquidator_succeeds_for_liquidator_sender() {
-    let state = contract_state_with_liquidator(Some(OWNER));
-    assert_liquidator(&state, &Addr::unchecked(OWNER), "only liquidator allowed")
-        .expect("liquidator sender should pass");
+    let state = contract_state_with_liquidator(Some(LIQUIDATOR));
+    assert_liquidator(
+        &state,
+        &Addr::unchecked(LIQUIDATOR),
+        "only liquidator allowed",
+    )
+    .expect("liquidator sender should pass");
 }
 
 #[test]
 fn assert_liquidator_fails_for_non_liquidator_sender() {
-    let state = contract_state_with_liquidator(Some(OWNER));
-    let err = assert_liquidator(
-        &state,
-        &Addr::unchecked(SOME_USER),
-        "only liquidator allowed",
-    )
-    .unwrap_err();
+    let state = contract_state_with_liquidator(Some(LIQUIDATOR));
+    let err =
+        assert_liquidator(&state, &Addr::unchecked(OWNER), "only liquidator allowed").unwrap_err();
 
     assert!(matches!(
         err,

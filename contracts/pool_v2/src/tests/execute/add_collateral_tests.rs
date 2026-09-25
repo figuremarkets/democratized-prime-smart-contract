@@ -10,7 +10,7 @@ use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_borrower_collateral;
 use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
-use crate::tests::query::common::{CUSTODIAN, OWNER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
     coin, from_json, to_json_binary, Addr, ContractResult, Decimal256, Env, MemoryStorage,
@@ -74,7 +74,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

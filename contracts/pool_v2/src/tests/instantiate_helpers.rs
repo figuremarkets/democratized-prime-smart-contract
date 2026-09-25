@@ -4,7 +4,7 @@ use crate::constants::REPO_TOKEN_INSTANTIATE_REPLY_ID;
 use crate::instantiate::instantiate_contract;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{InstantiateMsg, RepoTokenConfig};
-pub use crate::tests::query::common::{CUSTODIAN, OWNER};
+pub use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use cosmwasm_std::testing::message_info;
 use cosmwasm_std::{
     testing::{mock_env, MockApi},
@@ -92,7 +92,7 @@ pub fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

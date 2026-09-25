@@ -8,7 +8,7 @@ use crate::instantiate::instantiate_contract;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
-use crate::tests::query::common::{CUSTODIAN, OWNER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::reserve_invariant::assert_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{scaled_to_underlying_borrow, scaled_to_underlying_liquidity};
@@ -69,7 +69,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

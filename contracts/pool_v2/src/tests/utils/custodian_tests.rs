@@ -3,7 +3,7 @@
 use crate::model::contract_state::ContractStateV1;
 use crate::model::error::ContractError;
 use crate::model::{Denom, OperationalState, RateParamsV1};
-use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, SOME_USER};
 use crate::utils::assert_custodian;
 use cosmwasm_std::{Addr, Decimal256, Uint128};
 use std::str::FromStr;
@@ -38,7 +38,7 @@ fn contract_state_with_custodian(custodian: Option<&str>) -> ContractStateV1 {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: custodian.map(Addr::unchecked),
-        liquidator: Some(Addr::unchecked(OWNER)),
+        liquidator: Some(Addr::unchecked(LIQUIDATOR)),
         max_liquidation_staleness_seconds: 3600,
         liquidation_access: Default::default(),
     }

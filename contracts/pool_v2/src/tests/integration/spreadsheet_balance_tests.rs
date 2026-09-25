@@ -18,7 +18,7 @@ use crate::model::{
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
 use crate::storage::get_scaled_borrow;
-use crate::tests::query::common::{CUSTODIAN, OWNER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::utils::{
     scaled_to_underlying_borrow, scaled_to_underlying_liquidity, underlying_to_scaled_liquidity,
 };
@@ -57,7 +57,7 @@ const USER_B: &str = "tp1wvefn22cq723u98f6mdqykf6w6avfckjzp6rtz";
 const USER_C: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 const USER_D: &str = "tp1w9p4tkctug2jyyx663f77x7e5cdry067z6xee4";
 const USER_E: &str = "tp1cpcnkl3hpyv8sma7t3kyxzj23kjzuqypwhx3k0";
-const USER_L: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c"; // liquidator = owner
+const USER_L: &str = LIQUIDATOR;
 
 /// Spreadsheet rate params: target 9%, min 3.25%, max 20%, kink 90%, reserve 0.5%, 31_536_000 s/year.
 fn spreadsheet_rate_params() -> RateParamsV1 {
@@ -108,7 +108,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

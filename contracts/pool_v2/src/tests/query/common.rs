@@ -10,6 +10,7 @@ use std::str::FromStr;
 
 pub const OWNER: &str = "tp1fzvmcykduaj48yfp87k9gu2xqm6u6urslrwy0c";
 pub const CUSTODIAN: &str = "tp16ymwjfyzzatc8q0qldqdurv6kf3d3k8a8dqhgq";
+pub const LIQUIDATOR: &str = "tp1lfglp38atk7gv3z4pg4d3a6m62ma59x6tfwv9p";
 pub const NEW_CUSTODIAN: &str = "tp1tkn2dwfkx7pmjr2rtgqhtrudsv7h8w2tj6eesv";
 /// Valid Provenance bech32 so addr_validate passes. Used as `RepoTokenInstantiate::Existing` repo token address.
 pub const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -51,7 +52,7 @@ pub fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
-        liquidator: OWNER.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

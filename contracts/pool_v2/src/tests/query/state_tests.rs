@@ -4,7 +4,7 @@ use crate::contract::query;
 use crate::model::{ReserveStateV1, StateResponseV1};
 use crate::msg::QueryMsg;
 use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
-use crate::tests::query::common::{setup_instantiated, CUSTODIAN, OWNER, REPO_TOKEN_CW20};
+use crate::tests::query::common::{setup_instantiated, CUSTODIAN, LIQUIDATOR, REPO_TOKEN_CW20};
 use cosmwasm_std::Decimal256;
 use cosmwasm_std::{from_json, Uint128};
 use std::str::FromStr;
@@ -81,6 +81,6 @@ fn get_state_includes_liquidator() {
     let state: StateResponseV1 = from_json(bin).unwrap();
     assert_eq!(
         state.contract.liquidator,
-        Some(cosmwasm_std::Addr::unchecked(OWNER))
+        Some(cosmwasm_std::Addr::unchecked(LIQUIDATOR))
     );
 }
