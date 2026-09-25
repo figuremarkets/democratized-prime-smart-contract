@@ -3,7 +3,7 @@ use crate::constants::{
 };
 use crate::contract::{migrate, ASSERT_CUSTODIAN_ERR};
 use crate::model::error::illegal_argument;
-use crate::model::ContractStateV1;
+use crate::model::{ContractStateV1, LiquidationAccess};
 use crate::msg::MigrateMsg;
 use crate::storage::contract_state_key;
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
@@ -377,6 +377,62 @@ fn migration_proceeds_when_custodian_is_specified() {
             Attribute::new(ATTRIBUTE_LIQUIDATOR, OWNER),
         ]
     );
+}
+
+#[test]
+fn contract_state_storage_deserializes_owner_only_and_serializes_liquidator_only() {
+    let (deps, _) = setup_instantiated_contract();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let mut state_json = serde_json::to_value(&before).unwrap();
+    state_json["la"] = json!("owner_only");
+
+    let state: ContractStateV1 = serde_json::from_value(state_json).unwrap();
+    assert_eq!(state.liquidation_access, LiquidationAccess::LiquidatorOnly);
+
+    let out = serde_json::to_value(&state).unwrap();
+    assert_eq!(out["la"], json!("liquidator_only"));
+}
+
+#[test]
+fn migration_rewrites_legacy_owner_only_liquidation_access() {
+    let (mut deps, _env) = setup_instantiated_contract();
+    let before = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let mut state_json = serde_json::to_value(&before).unwrap();
+    {
+        let obj = state_json
+            .as_object_mut()
+            .expect("contract state serializes to a JSON object");
+        obj.remove("lqr");
+        obj.insert("la".to_string(), json!("owner_only"));
+    }
+    deps.as_mut().storage.set(
+        contract_state_key().as_bytes(),
+        &serde_json::to_vec(&state_json).unwrap(),
+    );
+
+    set_contract_version(
+        deps.as_mut().storage,
+        CONTRACT_NAME,
+        PREVIOUS_CONTRACT_VERSION,
+    )
+    .unwrap();
+
+    migrate(
+        deps.as_mut(),
+        mock_env(),
+        MigrateMsg {
+            custodian: None,
+            liquidator: None,
+        },
+    )
+    .expect("migrate should accept legacy owner_only liquidation access");
+
+    let after = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.liquidation_access, LiquidationAccess::LiquidatorOnly);
+    assert_eq!(after.liquidator, Some(Addr::unchecked(OWNER)));
+
+    let stored = serde_json::to_value(&after).unwrap();
+    assert_eq!(stored["la"], json!("liquidator_only"));
 }
 
 #[test]

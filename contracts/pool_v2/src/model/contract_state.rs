@@ -1,6 +1,7 @@
 use cosmwasm_std::{ensure, Addr, Decimal256, Uint128};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::collateral::CollateralAssetV1;
 use crate::model::error::{illegal_argument, illegal_state, ContractError};
@@ -112,6 +113,29 @@ impl LiquidationAccess {
     }
 }
 
+/// Parse persisted [`ContractStateV1::liquidation_access`] (`la`). Legacy pools stored
+/// `owner_only` before the liquidator role was split out; that tag maps to
+/// [`LiquidationAccess::LiquidatorOnly`]. Execute/instantiate JSON does not use this helper.
+fn liquidation_access_from_storage_str(s: &str) -> Result<LiquidationAccess, String> {
+    match s {
+        "liquidator_only" | "owner_only" => Ok(LiquidationAccess::LiquidatorOnly),
+        "permissionless" => Ok(LiquidationAccess::Permissionless),
+        other => Err(format!(
+            "unknown variant `{other}`, expected `liquidator_only`, `owner_only`, or `permissionless`"
+        )),
+    }
+}
+
+fn deserialize_liquidation_access_from_storage<'de, D>(
+    deserializer: D,
+) -> Result<LiquidationAccess, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    liquidation_access_from_storage_str(&s).map_err(DeError::custom)
+}
+
 impl BadDebtLossAllocation {
     /// Stable snake_case tag for event attributes (matches JSON).
     pub fn as_str(self) -> &'static str {
@@ -218,7 +242,12 @@ pub struct ContractStateV1 {
     pub max_liquidation_staleness_seconds: u64,
 
     /// Who may call Liquidate. Default [`LiquidationAccess::LiquidatorOnly`].
-    #[serde(rename = "la", default)]
+    /// Legacy on-chain JSON may still use `owner_only`; see [`liquidation_access_from_storage_str`].
+    #[serde(
+        rename = "la",
+        default,
+        deserialize_with = "deserialize_liquidation_access_from_storage"
+    )]
     pub liquidation_access: LiquidationAccess,
 }
 
@@ -228,5 +257,27 @@ impl ContractStateV1 {
         self.repo_token_cw20_address
             .clone()
             .ok_or_else(|| illegal_state("repo token not bound"))
+    }
+}
+
+#[cfg(test)]
+mod liquidation_access_storage_tests {
+    use super::*;
+
+    #[test]
+    fn liquidation_access_from_storage_str_maps_owner_only_to_liquidator_only() {
+        assert_eq!(
+            liquidation_access_from_storage_str("owner_only").unwrap(),
+            LiquidationAccess::LiquidatorOnly
+        );
+        assert_eq!(
+            liquidation_access_from_storage_str("liquidator_only").unwrap(),
+            LiquidationAccess::LiquidatorOnly
+        );
+        assert_eq!(
+            liquidation_access_from_storage_str("permissionless").unwrap(),
+            LiquidationAccess::Permissionless
+        );
+        assert!(liquidation_access_from_storage_str("bogus").is_err());
     }
 }
