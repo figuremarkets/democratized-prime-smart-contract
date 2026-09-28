@@ -332,7 +332,7 @@ fn liquidate_rejects_amount_that_does_not_reduce_scaled_debt() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
