@@ -30,7 +30,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Borrower position: debt, collateral amounts, collateral value (USD), LTV, health, and held denoms omitted from that USD total (`unpriceable_collateral`).",
+      "description": "Borrower position: debt, collateral amounts, collateral value (USD), borrow-side LTV/health (fresh prices), liquidation LTV/health (last-known within the liquidation bound), held denoms omitted from the borrow-side USD total (`unpriceable_collateral`), and held denoms omitted from liquidation LTV/seizure (`liquidation_unpriceable_collateral`).",
       "type": "object",
       "required": [
         "get_borrower_position"

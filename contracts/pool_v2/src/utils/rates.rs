@@ -1,7 +1,13 @@
 //! Kink interest rate model and index growth (scaled balances and linear accrual in time).
 //!
-//! Borrower rate: below kink `min + (u/kink)*(target - min)`, above kink `target + (u - kink)/(1 - kink)*(max - target)`.
-//! Lender rate: `borrower_rate * utilization * (1 - reserve_factor)`.
+//! Borrower rate: below kink `min + (u/kink)*(target - min)`, above kink
+//! `target + (u - kink)/(1 - kink)*(max - target)`, **clamped at `max_rate`**.
+//! Utilization can exceed 1 when `reserve_factor > 0` (borrow index outruns liquidity
+//! index and `u` drifts toward `1/(1-rf)`); the clamp keeps APR at the advertised cap.
+//! Lender rate: `borrower_rate * utilization * (1 - reserve_factor)`. **Not** clamped at
+//! `max_rate`: when `u > 1` this exceeds `borrower_rate * (1 - reserve_factor)` because it is a
+//! rate against `total_liquidity`, which can be smaller than `total_borrow`. Clamping it would
+//! break the `(1-rf)` split and reserve accrual.
 //! Protocol fee APR: `protocol_fee_rate` is `borrower_rate * reserve_factor` (reserve-factor mode)
 //! or `flat_fee_apr` (flat-spread mode); booked as `floor(total_borrow * fee_apr * dt / year)`.
 //! Index growth: `new_index = old_index * (1 + rate * elapsed_seconds / seconds_per_year)` (linear in time).
@@ -34,7 +40,10 @@ use result_extensions::ResultExtensions;
 
 /// Borrower APR from utilization (kink model).
 /// - utilization <= kink: rate = min_rate + (utilization / kink) * (target_rate - min_rate)
-/// - utilization > kink: rate = target_rate + (utilization - kink) / (1 - kink) * (max_rate - target_rate)
+/// - utilization > kink: rate = target_rate + (utilization - kink) / (1 - kink) * (max_rate - target_rate),
+///   then **min with `max_rate`**. `u` can exceed 1 because the borrow index outruns the
+///   liquidity index whenever `reserve_factor > 0` (`u` drifts to `1/(1-reserve_factor)`).
+///   `max_rate` is a cap, so clamp rather than extrapolate past it.
 pub fn borrower_rate_from_utilization(
     params: &RateParamsV1,
     utilization: Decimal256,
@@ -62,14 +71,22 @@ pub fn borrower_rate_from_utilization(
             .max_rate
             .checked_sub(params.target_rate)?
             .checked_div(above_kink)?;
+        // u can exceed 1 because the borrow index outruns the liquidity index whenever
+        // reserve_factor > 0 (u drifts to 1/(1-reserve_factor)). max_rate is a cap, so
+        // clamp rather than extrapolate past it.
         let rate = params.target_rate.checked_add(slope.checked_mul(excess)?)?;
-        Ok(rate)
+        Ok(rate.min(params.max_rate))
     }
 }
 
 /// Lender APR under configured fee model.
 /// - Reserve factor mode: borrower_rate * utilization * (1 - reserve_factor)
 /// - Flat spread mode: (borrower_rate - flat_fee_apr) * utilization
+///
+/// Not bounded by `max_rate`: when `u > 1` this exceeds `borrower_rate * (1 - reserve_factor)`.
+/// That is correct — it is a rate against `total_liquidity`, which can be smaller than
+/// `total_borrow`, and lender interest still equals `(1 - rf) ×` borrower interest. Do NOT clamp
+/// it; doing so would break the fee split and the reserve accrual's reconciliation.
 pub fn lender_rate_from_utilization(
     params: &RateParamsV1,
     utilization: Decimal256,

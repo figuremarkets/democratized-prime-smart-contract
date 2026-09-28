@@ -145,13 +145,24 @@ pub fn get_asset_prices_for_liquidation(
     let mut asset_ids: Vec<String> = vec![lending_denom.clone()];
     asset_ids.extend(borrower_collateral.amounts.keys().cloned());
 
-    let mut price_data = get_price_from_oracle(
+    let price_data = get_price_from_oracle(
         querier,
         &contract_state.price_oracle_address,
         &asset_ids,
         true,
     )?;
+    drop_unpriceable_for_liquidation(price_data, block_time, contract_state, borrower_collateral)
+}
 
+/// Filters a pre-fetched price map with the liquidation last-known bound.
+/// Same rules as [`get_asset_prices_for_liquidation`], without a second oracle query.
+pub fn drop_unpriceable_for_liquidation(
+    mut price_data: PriceMapResponse,
+    block_time: &Timestamp,
+    contract_state: &ContractStateV1,
+    borrower_collateral: &BorrowerCollateralV1,
+) -> Result<LiquidationPrices, ContractError> {
+    let lending_denom = &contract_state.lending_denom.name;
     let lending_price = price_data.get(lending_denom).ok_or_else(|| {
         not_found(format!(
             "Price of lending denom is missing: {}",

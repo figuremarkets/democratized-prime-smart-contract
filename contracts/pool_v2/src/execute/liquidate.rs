@@ -13,9 +13,10 @@
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
 //! A remainder worth **$0** after the seizure (empty map, or leftover with no haircutted USD)
-//! waives only the 100% floor; the bonus cap still applies, so a 1-atom repay can empty only a
-//! dust bag. Residual debt against that remainder is booked in the same transaction via
-//! `bad_debt_loss_allocation`.
+//! waives only the 100% floor; the bonus cap still applies, so a repay that actually reduces
+//! scaled debt can empty only a dust bag. A 1-atom repay is rejected once `borrow_index > 1`,
+//! because it floors to zero scaled units. Residual debt against that remainder is booked
+//! in the same transaction via `bad_debt_loss_allocation`.
 //!
 //! **How much must be repaid:** there is no closed-form minimum. Actual repay is
 //! `min(sent, ceil(scaled × borrow_index))`. The repay plus seizure must leave the borrower
@@ -23,9 +24,9 @@
 //! `new_scaled_debt`) rather than predicted up front. Full repayment, a full close, and a
 //! remainder whose haircutted USD is zero (unpriceable leftover, or priceable leftover that
 //! truncates to $0) are exempt from that health check — residual debt against a zero-value
-//! bag is booked as bad debt in the same tx. Only a non-zero attached amount is required at
-//! the funds check. Cancelling all scaled debt requires the ceiled payoff, whether or not the
-//! collateral map empties.
+//! bag is booked as bad debt in the same tx. The attached amount must reduce scaled debt;
+//! sub-index repayments are rejected before collateral can be seized. Cancelling all scaled
+//! debt requires the ceiled payoff, whether or not the collateral map empties.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -198,6 +199,10 @@ pub fn liquidate(
     } else {
         underlying_to_scaled_borrow(actual_repay_underlying, reserve.borrow_index)?
     };
+    ensure!(
+        scaled_repay > 0,
+        illegal_argument("Repay amount too small to reduce debt")
+    );
     let new_scaled_debt = scaled_debt
         .checked_sub(scaled_repay)
         .ok_or_else(|| illegal_state("scaled debt underflow"))?;

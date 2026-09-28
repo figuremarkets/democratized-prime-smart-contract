@@ -3,8 +3,8 @@
 //! We do not JSON-serialize storage models (e.g. ReserveStateV1) directly. Response types
 //! include derived fields (total_liquidity, total_borrow) so clients get a complete view.
 
-use crate::model::error::ContractError;
-use crate::model::{Denom, ReserveStateV1};
+use crate::model::health::BorrowerHealthResponseV1;
+use crate::model::{error::ContractError, Denom, ReserveStateV1};
 use cosmwasm_std::{Timestamp, Uint128};
 use result_extensions::ResultExtensions;
 use schemars::JsonSchema;
@@ -113,9 +113,10 @@ impl From<ReserveStateResponseV1> for ReserveStateV1 {
 pub struct ReserveResponseV1 {
     /// Effective reserve (indexes accrued to current block) with total_liquidity / total_borrow.
     pub reserve: ReserveStateResponseV1,
-    /// Current borrower APR (from utilization).
+    /// Current borrower APR (from utilization), clamped at `max_rate`.
     pub current_borrower_rate: String,
-    /// Current lender APR (from utilization).
+    /// Current lender APR (from utilization). Not bounded by `max_rate`; when `u > 1` this can
+    /// exceed `borrower_rate * (1 - reserve_factor)` because it is a rate against `total_liquidity`.
     pub current_lender_rate: String,
     /// Utilization (total_borrow / total_liquidity).
     pub utilization: String,
@@ -140,11 +141,27 @@ pub struct BorrowerPositionResponseV1 {
     /// Total collateral value in USD (after haircuts). "0" if no collateral or oracle unavailable.
     pub collateral_value_usd: String,
     /// Loan-to-value (debt value / collateral value). "0" if no collateral.
+    /// Uses fresh oracle prices (same bound as Borrow): stale collateral is omitted.
     pub loan_to_value: String,
     /// Health state (serializes as "healthy" | "unhealthy" | "liquidatable" | "no_collateral" | "unknown").
-    pub health: crate::model::health::BorrowerHealthResponseV1,
-    /// When health is "unknown", the reason LTV/health could not be computed (e.g. missing oracle price).
+    /// Uses the same fresh-price LTV as [`Self::loan_to_value`].
+    pub health: BorrowerHealthResponseV1,
+    /// When `health` (or [`Self::liquidation_health`]) is "unknown", the reason LTV could not
+    /// be computed (e.g. missing lending-denom price). One field covers both views: the
+    /// liquidation price map is a collateral superset of the borrow-side map whenever the
+    /// lending denom is usable, so a successful borrow-side health implies liquidation health
+    /// can also be computed.
     pub health_unknown_reason: Option<String>,
+    /// Loan-to-value using last-known prices within `max_liquidation_staleness_seconds`
+    /// (same bound as Liquidate). "0" if no collateral.
+    pub liquidation_ltv: String,
+    /// Health from [`Self::liquidation_ltv`] (same last-known bound as Liquidate).
+    pub liquidation_health: BorrowerHealthResponseV1,
+    /// Held collateral denoms omitted from liquidation LTV/seizure (missing, zero, or
+    /// last-known older than `max_liquidation_staleness_seconds`). Same set Liquidate
+    /// treats as unpriceable. Empty when every held asset is within the last-known bound.
+    #[serde(default)]
+    pub liquidation_unpriceable_collateral: Vec<String>,
 }
 
 /// Response for the GetCollateralRequirements query.

@@ -93,6 +93,141 @@ fn borrower_rate_at_full_utilization_equals_max_rate() {
 }
 
 #[test]
+fn borrower_rate_is_capped_at_max_rate_above_full_utilization() {
+    let params = spreadsheet_rate_params();
+    let u = Decimal256::from_str("1.5").unwrap();
+    let rate = borrower_rate_from_utilization(&params, u).unwrap();
+    assert_eq!(
+        rate, params.max_rate,
+        "u > 1 must not extrapolate past max_rate; got {rate}"
+    );
+}
+
+/// With a non-zero reserve factor, u = B/L drifts toward 1/(1-rf) > 1 with no new borrowing.
+/// Accrue yearly from u = 0.95 and assert the kink model never quotes above max_rate.
+#[test]
+fn borrower_rate_never_exceeds_max_rate_as_utilization_drifts_above_one() {
+    let mut deps = mock_dependencies();
+    let mut params = spreadsheet_rate_params();
+    // CBL-like: high reserve factor so u crosses 1 in a few years; max 15%.
+    params.reserve_factor = Decimal256::from_str("0.1").unwrap();
+    params.max_rate = Decimal256::from_str("0.15").unwrap();
+    params.target_rate = Decimal256::from_str("0.09").unwrap();
+    params.min_rate = Decimal256::from_str("0.0325").unwrap();
+    params.kink_utilization = Decimal256::from_str("0.90").unwrap();
+
+    let start = reserve(
+        Decimal256::one(),
+        Decimal256::one(),
+        1_000_000_000_000,
+        950_000_000_000,
+    );
+    assert_near(
+        start.utilization().unwrap(),
+        Decimal256::from_str("0.95").unwrap(),
+        "start at 95% utilization",
+    );
+    set_reserve_state_v1(deps.as_mut().storage, &start).unwrap();
+
+    let mut saw_u_above_one = false;
+    let mut last = start;
+    for year in 1..=30u64 {
+        last = compute_effective_reserve(
+            deps.as_ref().storage,
+            Timestamp::from_seconds(year * params.seconds_per_year),
+            &params,
+        )
+        .unwrap();
+        set_reserve_state_v1(deps.as_mut().storage, &last).unwrap();
+
+        let u = last.utilization().unwrap();
+        if u > Decimal256::one() {
+            saw_u_above_one = true;
+        }
+        let rate = borrower_rate_from_utilization(&params, u).unwrap();
+        assert!(
+            rate <= params.max_rate,
+            "year {year}: borrower rate {rate} exceeds max_rate {} at utilization {u}",
+            params.max_rate
+        );
+    }
+    assert!(
+        saw_u_above_one,
+        "scenario must actually drift past 100% utilization so the clamp is exercised; last u = {}",
+        last.utilization().unwrap()
+    );
+}
+
+/// Post-haircut `u >> 1` with the borrower-rate clamp active: lender + protocol interest from
+/// one year of accrual must still equal borrower interest. Clamping `lender_rate` would break this.
+#[test]
+fn lender_and_protocol_interest_tie_out_borrower_interest_above_full_utilization() {
+    let mut deps = mock_dependencies();
+    let mut params = spreadsheet_rate_params();
+    params.reserve_factor = Decimal256::from_str("0.1").unwrap();
+    params.max_rate = Decimal256::from_str("0.15").unwrap();
+    params.target_rate = Decimal256::from_str("0.09").unwrap();
+    params.min_rate = Decimal256::from_str("0.0325").unwrap();
+    params.kink_utilization = Decimal256::from_str("0.90").unwrap();
+
+    // L tiny vs B (post-haircut shape): u = 933, clamp is on, lender APR is a rate against L.
+    let start = reserve(Decimal256::one(), Decimal256::one(), 1_000_000, 933_000_000);
+    let u = start.utilization().unwrap();
+    assert!(u > Decimal256::one(), "test requires u > 1, got {}", u);
+
+    let borrower_rate = borrower_rate_from_utilization(&params, u).unwrap();
+    assert_eq!(
+        borrower_rate, params.max_rate,
+        "borrower APR must be clamped so this period actually uses the cap"
+    );
+    let lender_rate = lender_rate_from_utilization(&params, u, borrower_rate).unwrap();
+    assert!(
+        lender_rate > borrower_rate,
+        "lender APR is against L < B and must stay unclamped; got {} vs br {}",
+        lender_rate,
+        borrower_rate
+    );
+
+    set_reserve_state_v1(deps.as_mut().storage, &start).unwrap();
+    let accrued = compute_effective_reserve(
+        deps.as_ref().storage,
+        Timestamp::from_seconds(params.seconds_per_year),
+        &params,
+    )
+    .unwrap();
+
+    let scaled_borrow = Decimal256::from_ratio(start.total_scaled_borrow, Uint128::one());
+    let scaled_liquidity = Decimal256::from_ratio(start.total_scaled_liquidity, Uint128::one());
+    let borrower_interest = scaled_borrow
+        .checked_mul(
+            accrued
+                .borrow_index
+                .checked_sub(start.borrow_index)
+                .unwrap(),
+        )
+        .unwrap();
+    let lender_interest = scaled_liquidity
+        .checked_mul(
+            accrued
+                .liquidity_index
+                .checked_sub(start.liquidity_index)
+                .unwrap(),
+        )
+        .unwrap();
+    let protocol_fee = start
+        .total_borrow()
+        .unwrap()
+        .checked_mul(protocol_fee_rate(&params, borrower_rate).unwrap())
+        .unwrap();
+
+    assert_near(
+        lender_interest.checked_add(protocol_fee).unwrap(),
+        borrower_interest,
+        "lender interest + protocol fee must equal borrower interest with clamp on and u > 1",
+    );
+}
+
+#[test]
 fn borrower_rate_at_80_percent_near_spreadsheet() {
     let params = spreadsheet_rate_params();
     let u = Decimal256::from_str("0.80").unwrap();
