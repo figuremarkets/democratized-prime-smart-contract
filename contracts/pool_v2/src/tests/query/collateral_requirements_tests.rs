@@ -5,7 +5,8 @@ use crate::model::error::{ContractError, QueryError};
 use crate::model::{BorrowerCollateralV1, CollateralRequirementsResponseV1, ReserveStateV1};
 use crate::msg::QueryMsg;
 use crate::storage::{
-    get_reserve_state_v1, set_borrower_collateral, set_reserve_state_v1, set_scaled_borrow,
+    get_contract_state_v1, get_reserve_state_v1, set_borrower_collateral, set_contract_state_v1,
+    set_reserve_state_v1, set_scaled_borrow,
 };
 use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
 use crate::tests::query::common::{setup_instantiated, ORACLE, SOME_USER};
@@ -711,4 +712,159 @@ fn get_collateral_requirements_six_decimal_quote_is_unchanged() {
         "6-decimal quote must match the pre-existing value"
     );
     assert_quote_is_exactly_minimal(display, 6, amount, required_usd);
+}
+
+/// `asset.one` and the lending denom at $1, precision 0; reserve at `borrow_index` with cash
+/// for borrowing, and `existing_scaled` of borrower debt.
+fn setup_at_borrow_index(
+    borrow_index: &str,
+    existing_scaled: u128,
+) -> (
+    OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    cosmwasm_std::Env,
+) {
+    let (mut deps, env) = setup_instantiated();
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    if existing_scaled > 0 {
+        set_scaled_borrow(deps.as_mut().storage, SOME_USER, existing_scaled).unwrap();
+    }
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    set_reserve_state_v1(
+        deps.as_mut().storage,
+        &ReserveStateV1 {
+            borrow_index: Decimal256::from_str(borrow_index).unwrap(),
+            total_scaled_liquidity: 1_000_000,
+            total_scaled_borrow: existing_scaled,
+            ..reserve
+        },
+    )
+    .unwrap();
+    (deps, env)
+}
+
+fn quote(
+    deps: &OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &cosmwasm_std::Env,
+    borrower: Option<&str>,
+    new_loan_amount: u128,
+) -> CollateralRequirementsResponseV1 {
+    let bin = query(
+        deps.as_ref(),
+        env.clone(),
+        QueryMsg::GetCollateralRequirements {
+            borrower: borrower.map(str::to_string),
+            new_loan_amount: Uint128::new(new_loan_amount),
+            collateral_assets: vec!["asset.one".to_string()],
+        },
+    )
+    .expect("query should succeed");
+    from_json(bin).unwrap()
+}
+
+/// Borrow records ceil(101 / 1.5) = 68 scaled, i.e. floor(68 × 1.5) = 102 of debt, not 101.
+#[test]
+fn get_collateral_requirements_values_new_loan_as_recorded_debt() {
+    let (deps, env) = setup_at_borrow_index("1.5", 0);
+    let resp = quote(&deps, &env, None, 101);
+    assert_eq!(resp.required_collateral_value_usd, "127.5", "102 / 0.8");
+    assert_eq!(resp.required[0].amount.u128(), 160, "ceil(127.5 / 0.8)");
+    assert!(resp.required[0].satisfiable);
+}
+
+/// Existing 99 scaled at 1.05 floors to 103; borrowing 100 records floor(195 × 1.05) = 204, not 203.
+#[test]
+fn get_collateral_requirements_values_existing_plus_new_as_recorded_debt() {
+    let (deps, env) = setup_at_borrow_index("1.05", 99);
+    let resp = quote(&deps, &env, Some(SOME_USER), 100);
+    assert_eq!(resp.required_collateral_value_usd, "255", "204 / 0.8");
+    assert_eq!(resp.required[0].amount.u128(), 319, "ceil(255 / 0.8)");
+}
+
+/// $0.000001 of debt at margin 0.7: 0.000001 / 0.7 does not fit 18 decimals, and the truncated
+/// requirement would leave LTV above 0.7 when posted exactly. The query must round it up.
+#[test]
+fn get_collateral_requirements_rounds_required_value_up() {
+    let (mut deps, env) = setup_at_borrow_index("1", 0);
+    let mut state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    state.margin_rate = Decimal256::from_str("0.7").unwrap();
+    set_contract_state_v1(deps.as_mut().storage, &state).unwrap();
+    let mut prices = HashMap::new();
+    prices.insert(
+        "uylds.fcc".to_string(),
+        fresh_oracle_price(Decimal256::from_str("0.000001").unwrap(), env.block.time),
+    );
+    prices.insert(
+        "asset.one".to_string(),
+        fresh_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps, prices);
+
+    let resp = quote(&deps, &env, None, 1);
+    assert_eq!(resp.required_collateral_value_usd, "0.000001428571428572");
+}
+
+/// Existing debt alone is unchanged: floor(99 × 1.05) = 103.
+#[test]
+fn get_collateral_requirements_existing_debt_only_uses_floored_debt() {
+    let (deps, env) = setup_at_borrow_index("1.05", 99);
+    let resp = quote(&deps, &env, Some(SOME_USER), 0);
+    assert_eq!(resp.required_collateral_value_usd, "128.75", "103 / 0.8");
+}
+
+fn borrow_with_collateral(
+    borrow_index: &str,
+    existing_scaled: u128,
+    collateral: u128,
+    amount: u128,
+) -> Result<cosmwasm_std::Response, ContractError> {
+    let (mut deps, env) = setup_at_borrow_index(borrow_index, existing_scaled);
+    let mut amounts = BTreeMap::new();
+    amounts.insert("asset.one".to_string(), collateral);
+    set_borrower_collateral(
+        deps.as_mut().storage,
+        SOME_USER,
+        &BorrowerCollateralV1 { amounts },
+    )
+    .unwrap();
+    crate::contract::execute(
+        deps.as_mut(),
+        env,
+        cosmwasm_std::testing::message_info(&cosmwasm_std::Addr::unchecked(SOME_USER), &[]),
+        crate::msg::ExecuteMsg::Borrow {
+            amount: Uint128::new(amount),
+        },
+    )
+}
+
+/// A same-block Borrow backed by exactly the quoted collateral succeeds, and one unit less fails.
+#[test]
+fn get_collateral_requirements_quote_is_sufficient_and_minimal_for_same_block_borrow() {
+    for (index, existing_scaled, loan) in [("1.5", 0, 101), ("1.05", 99, 100)] {
+        let (deps, env) = setup_at_borrow_index(index, existing_scaled);
+        let borrower = (existing_scaled > 0).then_some(SOME_USER);
+        let quoted = quote(&deps, &env, borrower, loan).required[0].amount.u128();
+
+        borrow_with_collateral(index, existing_scaled, quoted, loan).unwrap_or_else(|e| {
+            panic!(
+                "borrow {} at index {} with quoted {} must succeed: {:?}",
+                loan, index, quoted, e
+            )
+        });
+        let err = borrow_with_collateral(index, existing_scaled, quoted - 1, loan).unwrap_err();
+        assert!(
+            err.to_string().contains("Loan-to-value"),
+            "one unit under the quote must fail the health check, got {:?}",
+            err
+        );
+    }
 }
