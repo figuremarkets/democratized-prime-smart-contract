@@ -299,6 +299,24 @@ pub fn underlying_to_scaled_borrow_ceil(
     Ok(out)
 }
 
+/// Debt recorded by a Borrow of `amount` on top of `current_scaled`:
+/// `(scaled_delta, new_scaled, floor(new_scaled × borrow_index))`.
+///
+/// The floored total can exceed `floor(current_scaled × index) + amount` by about one unit, so
+/// Borrow's health check and GetCollateralRequirements must both value this figure.
+pub fn debt_after_borrow(
+    current_scaled: u128,
+    amount: u128,
+    borrow_index: Decimal256,
+) -> Result<(u128, u128, u128), ContractError> {
+    let scaled_delta = underlying_to_scaled_borrow_ceil(amount, borrow_index)?;
+    let new_scaled = current_scaled.checked_add(scaled_delta).ok_or_else(|| {
+        illegal_state("overflow: borrower scaled debt (current_scaled + scaled_delta)")
+    })?;
+    let debt_after = scaled_to_underlying_borrow(new_scaled, borrow_index)?;
+    Ok((scaled_delta, new_scaled, debt_after))
+}
+
 /// Convert scaled liquidity to underlying (floor/truncate): underlying = scaled × liquidity_index.
 ///
 /// Used for balance queries and withdraw limits: "how much can the user withdraw?" We truncate

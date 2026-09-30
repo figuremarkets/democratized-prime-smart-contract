@@ -6,10 +6,10 @@ use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
 use crate::storage::set_reserve_state_v1;
 use crate::utils::rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization,
-    compute_effective_reserve, index_growth_factor, lender_rate_from_utilization,
-    protocol_fee_rate, reserve_totals_and_cash_u128, scaled_to_underlying_borrow,
-    scaled_to_underlying_borrow_ceil, time_elapsed_seconds, underlying_to_scaled_borrow_ceil,
-    underlying_to_scaled_liquidity,
+    compute_effective_reserve, debt_after_borrow, index_growth_factor,
+    lender_rate_from_utilization, protocol_fee_rate, reserve_totals_and_cash_u128,
+    scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil, time_elapsed_seconds,
+    underlying_to_scaled_borrow_ceil, underlying_to_scaled_liquidity,
 };
 use cosmwasm_std::testing::mock_dependencies;
 use cosmwasm_std::{Decimal256, Timestamp, Uint128, Uint256};
@@ -761,6 +761,26 @@ fn scaled_to_underlying_borrow_ceil_rounds_up_when_fractional() {
     let bi = Decimal256::from_str("1.05").unwrap();
     assert_eq!(scaled_to_underlying_borrow(99, bi).unwrap(), 103);
     assert_eq!(scaled_to_underlying_borrow_ceil(99, bi).unwrap(), 104);
+}
+
+#[test]
+fn debt_after_borrow_can_exceed_existing_plus_amount() {
+    let bi = Decimal256::from_str("1.5").unwrap();
+    assert_eq!(debt_after_borrow(0, 101, bi).unwrap(), (68, 68, 102));
+
+    let bi = Decimal256::from_str("1.05").unwrap();
+    assert_eq!(scaled_to_underlying_borrow(99, bi).unwrap(), 103);
+    assert_eq!(debt_after_borrow(99, 100, bi).unwrap(), (96, 195, 204));
+}
+
+#[test]
+fn debt_after_borrow_rejects_scaled_overflow() {
+    let err = debt_after_borrow(u128::MAX, 1, Decimal256::one()).unwrap_err();
+    assert!(
+        matches!(err, ContractError::IllegalStateError { .. }),
+        "{:?}",
+        err
+    );
 }
 
 #[test]

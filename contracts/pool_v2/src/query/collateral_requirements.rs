@@ -7,6 +7,8 @@
 //! Per-asset `satisfiable` is false when a positive requirement could not be quoted
 //! (deliberately coarse: down feed vs zero haircut vs unrepresentable units).
 //! Per-asset amounts use the closed-form `amount_from_usd_haircutted` helper.
+//! Debt is valued as Borrow records it at this block (`debt_after_borrow`), so a quote is
+//! sufficient for a same-block Borrow. Interest accrued before a later Borrow raises the debt.
 
 use crate::model::error::{ContractError, QueryError};
 use crate::model::query::AssetRequirementV1;
@@ -14,8 +16,8 @@ use crate::model::{haircut_percentage, CollateralRequirementsResponseV1};
 use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
 use crate::utils::health::calculate_total_collateral_value_usd;
 use crate::utils::{
-    calculate_borrow_value_usd, compute_effective_reserve, drop_unpriceable_collateral,
-    get_price_from_oracle, scaled_to_underlying_borrow,
+    calculate_borrow_value_usd, checked_div_ceil, compute_effective_reserve, debt_after_borrow,
+    drop_unpriceable_collateral, get_price_from_oracle, scaled_to_underlying_borrow,
 };
 use cosmwasm_std::{to_json_binary, Binary, Decimal256, Deps, Env, Uint128};
 
@@ -71,34 +73,33 @@ pub fn query_collateral_requirements(
     drop_unpriceable_collateral(&mut prices, &contract.lending_denom.name, &env.block.time)
         .map_err(QueryError::Contract)?;
 
-    let new_loan_value_usd =
-        calculate_borrow_value_usd(new_loan_amount, &contract.lending_denom.name, &prices)
-            .map_err(QueryError::Contract)?;
-
-    let current_loan_value_usd = if let Some(addr) = borrower {
-        let reserve =
-            compute_effective_reserve(deps.storage, env.block.time, &contract.rate_params)
-                .map_err(QueryError::Contract)?;
-        let scaled = get_scaled_borrow(deps.storage, addr).map_err(QueryError::Contract)?;
-        let existing_underlying = scaled_to_underlying_borrow(scaled, reserve.borrow_index)
-            .map_err(QueryError::Contract)?;
-        calculate_borrow_value_usd(
-            Uint128::from(existing_underlying),
-            &contract.lending_denom.name,
-            &prices,
-        )
-        .map_err(QueryError::Contract)?
-    } else {
-        Decimal256::zero()
+    // Value the debt Borrow would record in this block, not existing + new_loan_amount: the
+    // scaled round trip can add about one unit, which an exactly minimal quote cannot absorb.
+    let reserve = compute_effective_reserve(deps.storage, env.block.time, &contract.rate_params)
+        .map_err(QueryError::Contract)?;
+    let current_scaled = match borrower {
+        Some(addr) => get_scaled_borrow(deps.storage, addr).map_err(QueryError::Contract)?,
+        None => 0,
     };
-
-    let total_debt_value_usd = current_loan_value_usd
-        .checked_add(new_loan_value_usd)
-        .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
+    let total_debt = if new_loan_amount.is_zero() {
+        scaled_to_underlying_borrow(current_scaled, reserve.borrow_index)
+    } else {
+        debt_after_borrow(current_scaled, new_loan_amount.u128(), reserve.borrow_index)
+            .map(|(_, _, debt_after)| debt_after)
+    }
+    .map_err(QueryError::Contract)?;
+    let total_debt_value_usd = calculate_borrow_value_usd(
+        Uint128::from(total_debt),
+        &contract.lending_denom.name,
+        &prices,
+    )
+    .map_err(QueryError::Contract)?;
     // Minimum collateral so that LTV <= margin_rate (Healthy). get_borrower_health treats LTV > margin_rate as Unhealthy.
-    let required_collateral_value_usd = total_debt_value_usd
-        .checked_div(contract.margin_rate)
-        .map_err(|e| QueryError::Contract(ContractError::from(e)))?;
+    // Rounded up: a truncated quotient can leave debt / required a few atomics above margin_rate
+    // for small debts, which the truncated LTV does not absorb.
+    let required_collateral_value_usd =
+        checked_div_ceil(total_debt_value_usd, contract.margin_rate)
+            .map_err(QueryError::Contract)?;
 
     // When borrower is set, subtract their existing collateral value so per-asset "required" is additional needed.
     let value_to_cover = if let Some(ref bc) = borrower_collateral_opt {
