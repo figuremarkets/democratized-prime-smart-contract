@@ -157,9 +157,9 @@ pub struct BorrowerPositionResponseV1 {
     pub liquidation_ltv: String,
     /// Health from [`Self::liquidation_ltv`] (same last-known bound as Liquidate).
     pub liquidation_health: BorrowerHealthResponseV1,
-    /// Held collateral denoms omitted from liquidation LTV/seizure (missing, zero, or
-    /// last-known older than `max_liquidation_staleness_seconds`). Same set Liquidate
-    /// treats as unpriceable. Empty when every held asset is within the last-known bound.
+    /// Held collateral denoms omitted from liquidation LTV (missing, zero, or last-known
+    /// older than `max_liquidation_staleness_seconds`). Not seizable in a partial liquidation;
+    /// swept on a write-off. Empty when every held asset is within the last-known bound.
     #[serde(default)]
     pub liquidation_unpriceable_collateral: Vec<String>,
 }
