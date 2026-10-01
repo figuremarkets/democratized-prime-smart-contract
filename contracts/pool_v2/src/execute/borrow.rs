@@ -7,9 +7,9 @@ use crate::storage::{
     set_scaled_borrow,
 };
 use crate::utils::{
-    get_asset_prices_for_borrower, get_borrower_health, reserve_totals_and_cash_u128,
-    scaled_to_underlying_borrow, underlying_to_scaled_borrow_ceil, update_reserve_indexes,
-    validate_borrower_attrs, validate_borrower_is_healthy, WithRates,
+    debt_after_borrow, get_asset_prices_for_borrower, get_borrower_health,
+    reserve_totals_and_cash_u128, update_reserve_indexes, validate_borrower_attrs,
+    validate_borrower_is_healthy, WithRates,
 };
 use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 
@@ -63,13 +63,10 @@ pub fn borrow(
     );
 
     let current_scaled = get_scaled_borrow(deps.storage, info.sender.as_str())?;
-    let scaled_delta = underlying_to_scaled_borrow_ceil(amount.u128(), reserve.borrow_index)?;
-    let new_scaled = current_scaled.checked_add(scaled_delta).ok_or_else(|| {
-        illegal_state("overflow: borrower scaled debt (current_scaled + scaled_delta)")
-    })?;
     // LTV uses floored recorded debt. Using current_underlying + amount would understate it
     // (ceil on mint) and could allow a borrow slightly above margin_rate.
-    let debt_after_u128 = scaled_to_underlying_borrow(new_scaled, reserve.borrow_index)?;
+    let (scaled_delta, new_scaled, debt_after_u128) =
+        debt_after_borrow(current_scaled, amount.u128(), reserve.borrow_index)?;
     let debt_after = Uint128::from(debt_after_u128);
 
     let asset_prices = get_asset_prices_for_borrower(
