@@ -45,5 +45,7 @@ pub const ATTRIBUTE_BAD_DEBT_UNDERLYING: &str = "bad_debt_underlying";
 pub const ATTRIBUTE_DEFICIT_UNDERLYING: &str = "deficit_underlying";
 /// Unbacked `accrued_reserve` closed by WithdrawReserve's solvency cap (lending base units).
 pub const ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF: &str = "unbacked_reserve_writeoff";
+/// Backed `accrued_reserve` left booked after WithdrawReserve when the bank could not pay all of it.
+pub const ATTRIBUTE_ACCRUED_RESERVE_REMAINING: &str = "accrued_reserve_remaining";
 /// Pool config `bad_debt_loss_allocation` when a liquidation hits the bad-debt path.
 pub const ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION: &str = "bad_debt_loss_allocation";

@@ -1,27 +1,37 @@
 //! Tests for WithdrawReserve execute: success to contract owner or explicit recipient, assets-liabilities tie out,
 //! and failures for non-owner, with funds, and when no accrued reserve.
 
-use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF};
+use crate::constants::{
+    ATTRIBUTE_ACCRUED_RESERVE_REMAINING, ATTRIBUTE_ACTION_NAME, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF,
+};
 use crate::contract::execute;
 use crate::execute::withdraw_reserve::{ACTION, ASSERT_OWNER_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
+use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
-use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
+use crate::storage::{
+    get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow, set_reserve_state_v1,
+};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use crate::tests::reserve_invariant::assert_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
-use crate::utils::{scaled_to_underlying_borrow, scaled_to_underlying_liquidity};
+use crate::utils::{
+    compute_effective_reserve, scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil,
+    scaled_to_underlying_liquidity,
+};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
     coin, from_json, to_json_binary, Addr, BankMsg, ContractResult, CosmosMsg, Decimal256,
     QuerierResult, SystemError, SystemResult, Timestamp, Uint128, WasmQuery,
 };
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
+use cw20::{BalanceResponse, Cw20ReceiveMsg};
 use democratized_prime_lib::common::ContractError;
 use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
 use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use provwasm_mocks::mock_provenance_dependencies;
+use serde_json::{from_slice as json_from_slice, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -546,6 +556,14 @@ fn withdraw_reserve_keeps_backed_fees_booked_when_borrow_exceeds_liquidity() {
             .accrued_reserve,
         10
     );
+    assert_eq!(
+        response
+            .attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_ACCRUED_RESERVE_REMAINING)
+            .map(|a| a.value.as_str()),
+        Some("10")
+    );
 
     // Borrowers repay in full. Bank then holds the repaid principal plus the fee still booked.
     let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
@@ -691,4 +709,276 @@ fn withdraw_reserve_rejects_when_nothing_is_payable_and_leaves_accrued_reserve()
     let after = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(after.accrued_reserve, before.accrued_reserve);
     assert_eq!(after, before);
+}
+
+const E2E_LENDER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
+const E2E_BORROWER: &str = "tp1w9p4tkctug2jyyx663f77x7e5cdry067z6xee4";
+const E2E_COLLATERAL: &str = "asset.one";
+const BANK_DUST_TOLERANCE: u128 = 10;
+
+fn sync_contract_bank(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &Env,
+    balance: u128,
+) {
+    deps.querier.mock_querier.bank.update_balance(
+        env.contract.address.as_str(),
+        vec![coin(balance, LENDING_DENOM)],
+    );
+}
+
+fn bank_send_amount(response: &cosmwasm_std::Response) -> u128 {
+    match &response.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { amount, .. }) => amount[0].amount.u128(),
+        _ => panic!("expected Bank Send"),
+    }
+}
+
+fn response_attribute<'a>(response: &'a cosmwasm_std::Response, key: &str) -> Option<&'a str> {
+    response
+        .attributes
+        .iter()
+        .find(|a| a.key == key)
+        .map(|a| a.value.as_str())
+}
+
+fn mock_repo_scaled_balance(
+    querier: &mut provwasm_mocks::MockProvenanceQuerier,
+    lender_scaled_balance: u128,
+) {
+    let balance = lender_scaled_balance;
+    let handler = move |query: &WasmQuery| -> QuerierResult {
+        match query {
+            WasmQuery::Smart { contract_addr, msg }
+                if contract_addr.as_str() == REPO_TOKEN_CW20 =>
+            {
+                if let Ok(v) = json_from_slice::<JsonValue>(msg.as_slice()) {
+                    if v.get("scaled_balance")
+                        .and_then(|b| b.get("address"))
+                        .and_then(|a| a.as_str())
+                        .is_some()
+                    {
+                        return SystemResult::Ok(ContractResult::Ok(
+                            to_json_binary(&BalanceResponse {
+                                balance: Uint128::from(balance),
+                            })
+                            .unwrap(),
+                        ));
+                    }
+                }
+                SystemResult::Err(SystemError::UnsupportedRequest {
+                    kind: "expected scaled_balance query".to_string(),
+                })
+            }
+            _ => SystemResult::Err(SystemError::NoSuchContract {
+                addr: "unknown".to_string(),
+            }),
+        }
+    };
+    querier.mock_querier.update_wasm(handler);
+}
+
+fn advance_until_borrow_exceeds_liquidity(
+    deps: &OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &mut Env,
+    min_accrued_reserve: u128,
+) -> u128 {
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let start = env.block.time.seconds();
+    let accrued_at_jump;
+    let mut t = start;
+    loop {
+        t += 86_400;
+        let ts = Timestamp::from_seconds(t);
+        let effective = compute_effective_reserve(deps.as_ref().storage, ts, &contract.rate_params)
+            .expect("accrual projection");
+        let total_liquidity = scaled_to_underlying_liquidity(
+            effective.total_scaled_liquidity,
+            effective.liquidity_index,
+        )
+        .unwrap();
+        let total_borrow =
+            scaled_to_underlying_borrow(effective.total_scaled_borrow, effective.borrow_index)
+                .unwrap();
+        let borrow_surplus = total_borrow.saturating_sub(total_liquidity);
+        if borrow_surplus > 500_000 && effective.accrued_reserve >= min_accrued_reserve {
+            env.block.time = ts;
+            accrued_at_jump = effective.accrued_reserve;
+            break;
+        }
+        assert!(
+            t <= start + 200 * 31_536_000,
+            "borrow did not exceed liquidity within 200 years of simulation"
+        );
+    }
+    accrued_at_jump
+}
+
+/// End-to-end signed-cap reserve path without hand-built reserve snapshots.
+#[test]
+fn withdraw_reserve_e2e_accrual_partial_payout_repay_and_lender_exit() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut env = mock_env();
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(E2E_COLLATERAL.to_string(), price_entry("100"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        default_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    let lend_amount = 100_000_000u128;
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(E2E_LENDER),
+            &[coin(lend_amount, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+    let lender_scaled = get_reserve_state_v1(deps.as_ref().storage)
+        .unwrap()
+        .total_scaled_liquidity;
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(E2E_BORROWER),
+            &[coin(2_000_000, E2E_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add collateral");
+
+    let borrow_amount = 99_900_000u128;
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(E2E_BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(borrow_amount),
+        },
+    )
+    .expect("borrow");
+
+    let mut contract_bank = lend_amount - borrow_amount;
+    sync_contract_bank(&mut deps, &env, contract_bank);
+
+    let mut higher_rf = default_instantiate_msg().rate_params;
+    higher_rf.reserve_factor = Decimal256::from_str("0.05").unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(CUSTODIAN), &[]),
+        ExecuteMsg::UpdateRateParams {
+            rate_params: higher_rf,
+        },
+    )
+    .expect("raise reserve factor for meaningful fee accrual");
+
+    let min_accrued = contract_bank * 3;
+    let accrued_from_accrual = advance_until_borrow_exceeds_liquidity(&deps, &mut env, min_accrued);
+    assert!(accrued_from_accrual > contract_bank);
+
+    let small_repay = 10_000u128;
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(E2E_BORROWER),
+            &[coin(small_repay, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("partial repay");
+    contract_bank += small_repay;
+    sync_contract_bank(&mut deps, &env, contract_bank);
+
+    let mut owner_paid = 0u128;
+    let first = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("first withdraw_reserve");
+    let first_pay = bank_send_amount(&first);
+    owner_paid += first_pay;
+    contract_bank -= first_pay;
+    sync_contract_bank(&mut deps, &env, contract_bank);
+
+    let reserve_after_first = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert!(reserve_after_first.accrued_reserve > 0);
+    assert!(response_attribute(&first, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF).is_none());
+    assert_eq!(
+        response_attribute(&first, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
+        Some(reserve_after_first.accrued_reserve.to_string().as_str())
+    );
+
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    let scaled = get_scaled_borrow(deps.as_ref().storage, E2E_BORROWER).unwrap();
+    let full_repay = scaled_to_underlying_borrow_ceil(scaled, reserve.borrow_index).unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(E2E_BORROWER),
+            &[coin(full_repay, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("full repay");
+    contract_bank += full_repay;
+    sync_contract_bank(&mut deps, &env, contract_bank);
+
+    let second = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("second withdraw_reserve");
+    let second_pay = bank_send_amount(&second);
+    owner_paid += second_pay;
+    contract_bank -= second_pay;
+    sync_contract_bank(&mut deps, &env, contract_bank);
+    assert!(response_attribute(&second, ATTRIBUTE_ACCRUED_RESERVE_REMAINING).is_none());
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .accrued_reserve,
+        0
+    );
+
+    mock_repo_scaled_balance(&mut deps.querier, lender_scaled);
+    let withdraw = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
+        ExecuteMsg::Receive(Cw20ReceiveMsg {
+            sender: E2E_LENDER.to_string(),
+            amount: Uint128::from(lender_scaled),
+            msg: to_json_binary(&Cw20ReceivePayload::WithdrawExact { commit_funds: None }).unwrap(),
+        }),
+    )
+    .expect("lender withdraw_exact");
+    let lender_sent = match &withdraw.messages[1].msg {
+        CosmosMsg::Bank(BankMsg::Send { amount, .. }) => amount[0].amount.u128(),
+        _ => panic!("expected lender bank send"),
+    };
+    contract_bank -= lender_sent;
+    sync_contract_bank(&mut deps, &env, contract_bank);
+
+    assert!(contract_bank <= BANK_DUST_TOLERANCE);
+    assert_eq!(owner_paid, accrued_from_accrual);
 }

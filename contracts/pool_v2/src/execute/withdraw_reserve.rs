@@ -2,8 +2,8 @@
 //! in lending denom to a specified recipient (or owner if omitted).
 
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_RECIPIENT,
-    ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF,
+    ATTRIBUTE_ACCRUED_RESERVE_REMAINING, ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT,
+    ATTRIBUTE_RECIPIENT, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF,
 };
 use crate::model::error::{illegal_state, invalid_funds, ContractError};
 use crate::storage::{get_contract_state_v1, set_reserve_state_v1};
@@ -99,6 +99,12 @@ pub fn withdraw_reserve(
     if writeoff > 0 {
         response =
             response.add_attribute(ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF, writeoff.to_string());
+    }
+    if reserve.accrued_reserve > 0 {
+        response = response.add_attribute(
+            ATTRIBUTE_ACCRUED_RESERVE_REMAINING,
+            reserve.accrued_reserve.to_string(),
+        );
     }
     response.attach_rates(&reserve, &contract.rate_params)
 }
