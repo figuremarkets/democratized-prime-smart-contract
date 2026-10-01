@@ -328,6 +328,16 @@ pub fn liquidate(
             pre_priced_market_value_usd.checked_add(price.value_usd(*amt)?)?;
     }
     let debt_payoff_value_usd = price_lending.value_usd(debt_payoff)?;
+    // Accepted risk (sc-556130). While D <= C < D * liquidation_bonus_rate,
+    // liquidator profit is capped at C - D (the borrower's remaining value)
+    // and falls to 0 as C approaches D. Below D, a write-off pays the bonus
+    // again, so a keeper with no competition may wait for insolvency. Paying
+    // more in this band would charge lenders, which is the finding this guard
+    // closes. A position reaches the band only if nobody liquidated earlier,
+    // while the full bonus was still available. At default rates that window
+    // runs from about 1.39*D down to 1.02*D. Mitigation is operational: run
+    // the owner liquidator at liquidation_rate. A keeper subsidy is a separate
+    // product decision.
     ensure!(
         !(bad_debt && pre_priced_market_value_usd >= debt_payoff_value_usd),
         illegal_argument(format!(
