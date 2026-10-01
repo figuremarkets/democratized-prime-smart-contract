@@ -23,7 +23,7 @@ Models define the **data shapes** used by the contract: what gets stored, what g
 | `max_rate` | Borrower APR when utilization = 100% (e.g. 20%). |
 | `kink_utilization` | Utilization where the curve kinks (e.g. 0.9 = 90%). Below this, rate rises slowly; above, rate rises steeply. |
 | `reserve_factor` | Share of borrower interest kept by the protocol (e.g. 0.005 = 0.5%). Lender rate = borrower_rate × utilization × (1 − reserve_factor). |
-| `seconds_per_year` | Used for index growth (e.g. 31_536_000). |
+| `seconds_per_year` | Used for index growth. Must be in `31_536_000..=31_622_400` (365–366 days) so a `max_rate` of 1 is at most 100% APR. |
 
 Set at **instantiation** and used whenever we compute borrower/lender rates from utilization and when we grow indexes. A zero protocol fee is allowed (`reserve_factor = 0` or `flat_fee_apr = 0`); the direct fee formula then books nothing into `accrued_reserve`.
 
