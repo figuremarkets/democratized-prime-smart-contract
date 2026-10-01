@@ -442,11 +442,9 @@ pub fn liquidate(
         .collect();
 
     // ---------- 9. Response: collateral BankMsg, standard attributes, optional bad-debt attributes ----------
+    // An empty seize that is not a write-off moves no coins. Skip the send rather than
+    // emitting a BankMsg with an empty coin list.
     let mut res = Response::new()
-        .add_message(BankMsg::Send {
-            to_address: info.sender.to_string(),
-            amount: send_coins.clone(),
-        })
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
         .add_attribute(ATTRIBUTE_LIQUIDATOR, info.sender.as_str())
         .add_attribute(ATTRIBUTE_BORROWER, borrower_key)
@@ -460,6 +458,12 @@ pub fn liquidate(
             ATTRIBUTE_LIQUIDATION_ACCESS,
             contract.liquidation_access.as_str(),
         );
+    if !send_coins.is_empty() {
+        res = res.add_message(BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: send_coins,
+        });
+    }
     if bad_debt {
         res = res
             .add_attribute(
