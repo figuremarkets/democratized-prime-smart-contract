@@ -443,3 +443,252 @@ fn withdraw_reserve_caps_payout_at_bank_surplus_over_lender_claims() {
         .expect("capped withdraw must surface the unbacked writeoff");
     assert_eq!(writeoff.value, (50_000_000u128 - bank_surplus).to_string());
 }
+
+/// Worked example: scaled liquidity 1000 at index 1.08 (L = 1080), scaled borrow 1000 at index 1.09 (B = 1090).
+const SIGNED_CAP_SCALED: u128 = 1_000;
+const SIGNED_CAP_LIQUIDITY_INDEX: &str = "1.08";
+const SIGNED_CAP_BORROW_INDEX: &str = "1.09";
+
+fn sent_lending_amount(response: &cosmwasm_std::Response) -> u128 {
+    match &response.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { amount, .. }) => {
+            assert_eq!(amount.len(), 1);
+            assert_eq!(amount[0].denom, LENDING_DENOM);
+            amount[0].amount.u128()
+        }
+        _ => panic!("expected Bank Send"),
+    }
+}
+
+fn writeoff_attribute(response: &cosmwasm_std::Response) -> Option<&str> {
+    response
+        .attributes
+        .iter()
+        .find(|attr| attr.key == ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF)
+        .map(|attr| attr.value.as_str())
+}
+
+struct ReserveSnapshot {
+    total_scaled_liquidity: u128,
+    liquidity_index: &'static str,
+    total_scaled_borrow: u128,
+    borrow_index: &'static str,
+    accrued_reserve: u128,
+    bank: u128,
+}
+
+/// Overwrite reserve totals and the lending-denom bank balance. `last_updated_at` matches the
+/// block so `update_reserve_indexes` does not accrue before the payout math runs.
+fn install_reserve_snapshot(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &Env,
+    snapshot: ReserveSnapshot,
+) {
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.last_updated_at = env.block.time;
+    reserve.total_scaled_liquidity = snapshot.total_scaled_liquidity;
+    reserve.liquidity_index = Decimal256::from_str(snapshot.liquidity_index).unwrap();
+    reserve.total_scaled_borrow = snapshot.total_scaled_borrow;
+    reserve.borrow_index = Decimal256::from_str(snapshot.borrow_index).unwrap();
+    reserve.accrued_reserve = snapshot.accrued_reserve;
+    reserve.deficit_underlying = 0;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+    deps.querier.mock_querier.bank.update_balance(
+        env.contract.address.as_str(),
+        vec![coin(snapshot.bank, LENDING_DENOM)],
+    );
+}
+
+#[test]
+fn withdraw_reserve_keeps_backed_fees_booked_when_borrow_exceeds_liquidity() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+    // L = 1080, B = 1090, AR = 20, bank = 10 → pay 10, AR stays 10, no writeoff.
+    install_reserve_snapshot(
+        &mut deps,
+        &env,
+        ReserveSnapshot {
+            total_scaled_liquidity: SIGNED_CAP_SCALED,
+            liquidity_index: SIGNED_CAP_LIQUIDITY_INDEX,
+            total_scaled_borrow: SIGNED_CAP_SCALED,
+            borrow_index: SIGNED_CAP_BORROW_INDEX,
+            accrued_reserve: 20,
+            bank: 10,
+        },
+    );
+    let before = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        scaled_to_underlying_liquidity(before.total_scaled_liquidity, before.liquidity_index)
+            .unwrap(),
+        1_080
+    );
+    assert_eq!(
+        scaled_to_underlying_borrow(before.total_scaled_borrow, before.borrow_index).unwrap(),
+        1_090
+    );
+
+    let response = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("backed surplus should be withdrawable");
+
+    let first_pay = sent_lending_amount(&response);
+    assert_eq!(first_pay, 10);
+    assert!(
+        writeoff_attribute(&response).is_none(),
+        "fully backed remainder must not be written off"
+    );
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .accrued_reserve,
+        10
+    );
+
+    // Borrowers repay in full. Bank then holds the repaid principal plus the fee still booked.
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.total_scaled_borrow = 0;
+    reserve.last_updated_at = env.block.time;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+    let bank_after_repay = 1_090u128;
+    deps.querier.mock_querier.bank.update_balance(
+        env.contract.address.as_str(),
+        vec![coin(bank_after_repay, LENDING_DENOM)],
+    );
+
+    let follow_up = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("repaid fees should be withdrawable");
+
+    let second_pay = sent_lending_amount(&follow_up);
+    assert_eq!(second_pay, 10);
+    assert!(writeoff_attribute(&follow_up).is_none());
+    let after = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.accrued_reserve, 0);
+    let lender_claims =
+        scaled_to_underlying_liquidity(after.total_scaled_liquidity, after.liquidity_index)
+            .unwrap();
+    let bank_received = 10u128 + bank_after_repay;
+    assert_eq!(
+        first_pay + second_pay + lender_claims,
+        bank_received,
+        "coins sent plus remaining lender claims must equal every coin the bank received"
+    );
+}
+
+#[test]
+fn withdraw_reserve_writes_off_only_unbacked_when_liquidity_covers_claims() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+    // L = 1000, B = 0, AR = 50, bank = 1005 → pay 5, AR = 0, writeoff = 45.
+    install_reserve_snapshot(
+        &mut deps,
+        &env,
+        ReserveSnapshot {
+            total_scaled_liquidity: 1_000,
+            liquidity_index: "1",
+            total_scaled_borrow: 0,
+            borrow_index: "1",
+            accrued_reserve: 50,
+            bank: 1_005,
+        },
+    );
+
+    let response = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("solvent surplus should be withdrawable");
+
+    assert_eq!(sent_lending_amount(&response), 5);
+    assert_eq!(writeoff_attribute(&response), Some("45"));
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .accrued_reserve,
+        0
+    );
+}
+
+#[test]
+fn withdraw_reserve_writes_off_only_the_unbacked_slice_when_borrow_exceeds_liquidity() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+    // L = 1080, B = 1090, AR = 25, bank = 10 → pay 10, AR = 10, writeoff = 5.
+    install_reserve_snapshot(
+        &mut deps,
+        &env,
+        ReserveSnapshot {
+            total_scaled_liquidity: SIGNED_CAP_SCALED,
+            liquidity_index: SIGNED_CAP_LIQUIDITY_INDEX,
+            total_scaled_borrow: SIGNED_CAP_SCALED,
+            borrow_index: SIGNED_CAP_BORROW_INDEX,
+            accrued_reserve: 25,
+            bank: 10,
+        },
+    );
+
+    let response = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("backed portion should be withdrawable");
+
+    assert_eq!(sent_lending_amount(&response), 10);
+    assert_eq!(writeoff_attribute(&response), Some("5"));
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .accrued_reserve,
+        10
+    );
+}
+
+#[test]
+fn withdraw_reserve_rejects_when_nothing_is_payable_and_leaves_accrued_reserve() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+    // bank = 0, B > L, AR > 0 → error and no state change.
+    install_reserve_snapshot(
+        &mut deps,
+        &env,
+        ReserveSnapshot {
+            total_scaled_liquidity: SIGNED_CAP_SCALED,
+            liquidity_index: SIGNED_CAP_LIQUIDITY_INDEX,
+            total_scaled_borrow: SIGNED_CAP_SCALED,
+            borrow_index: SIGNED_CAP_BORROW_INDEX,
+            accrued_reserve: 20,
+            bank: 0,
+        },
+    );
+    let before = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalStateError { message } => {
+            assert!(
+                message.contains("No solvent accrued reserve available to withdraw"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalStateError, got {:?}", err),
+    }
+    let after = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.accrued_reserve, before.accrued_reserve);
+    assert_eq!(after, before);
+}
