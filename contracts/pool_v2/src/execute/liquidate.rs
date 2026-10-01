@@ -14,7 +14,9 @@
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
 //! A remainder worth **$0** after the seizure waives only the 100% floor; the bonus cap still
-//! applies, so a repay that actually reduces scaled debt can empty only a dust bag. A 1-atom
+//! applies, so a repay that actually reduces scaled debt can empty only a dust bag. A write-off
+//! requires the pre-seizure market value of priced collateral to be below the debt payoff;
+//! otherwise emptying the map requires the full payoff. A 1-atom
 //! repay is rejected once `borrow_index > 1`, because it floors to zero scaled units. Residual
 //! debt against that remainder is booked in the same transaction via `bad_debt_loss_allocation`,
 //! and every remaining collateral unit is swept to the liquidator. Invariant: `bad_debt` implies
@@ -32,7 +34,8 @@
 //! bag is booked as bad debt in the same tx and the leftover units are swept. The attached
 //! amount must reduce scaled debt; sub-index repayments are rejected before collateral can be
 //! seized. Cancelling all scaled debt requires the ceiled payoff, whether or not the collateral
-//! map empties.
+//! map empties. A write-off requires pre-seizure priced collateral market value below the debt
+//! payoff; otherwise emptying the map requires the full payoff.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -52,7 +55,8 @@
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
 //! liquidatable → lending price → sent funds and scaled repay → per-asset checks and dry-run
 //! post-seizure → `bad_debt` → owner gate (load-bearing unpriceable, or a write-off that would
-//! sweep unpriceable collateral) → value band (100% floor waived on `bad_debt`, or a full
+//! sweep unpriceable collateral) → solvent write-off guard (priced market value must be below
+//! the debt payoff) → value band (100% floor waived on `bad_debt`, or a full
 //! repay that seizes nothing) → post-state
 //! health → persist reserve, sweep the remainder on `bad_debt`, collateral → response
 //! (collateral send + attrs) → refund excess lending.
@@ -100,7 +104,8 @@ pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
 /// nothing, waives the 100% floor (bonus cap still applies). The resulting post-state must be
 /// at or below `margin_rate` — there is no precomputed minimum repay. Residual debt against a
 /// zero-value remainder is booked as bad debt and every remaining unit is swept to the
-/// liquidator. An empty seize is allowed only
+/// liquidator. A write-off requires pre-seizure priced collateral market value below the debt
+/// payoff; otherwise emptying the map requires the full payoff. An empty seize is allowed only
 /// when the borrower holds nothing priceable. See module doc for flow.
 pub fn liquidate(
     deps: DepsMut,
@@ -306,6 +311,30 @@ pub fn liquidate(
         bad_debt,
         &post_collateral,
     )?;
+
+    // Priced collateral is summed at market (`value_usd`, no haircut), the same measure as the
+    // seizure band. Unpriceable holdings and ids missing from `asset_prices` count as $0, so an
+    // all-unpriceable or mixed-bag write-off still proceeds when the priced slice is short.
+    // At exactly C = D the full close (not this short repay) is the valid path.
+    let mut pre_priced_market_value_usd = Decimal256::zero();
+    for (asset_id, amt) in borrower_collateral.amounts.iter() {
+        if *amt == 0 || quoted.unpriceable.contains(asset_id) {
+            continue;
+        }
+        let Some(price) = asset_prices.get(asset_id) else {
+            continue;
+        };
+        pre_priced_market_value_usd =
+            pre_priced_market_value_usd.checked_add(price.value_usd(*amt)?)?;
+    }
+    let debt_payoff_value_usd = price_lending.value_usd(debt_payoff)?;
+    ensure!(
+        !(bad_debt && pre_priced_market_value_usd >= debt_payoff_value_usd),
+        illegal_argument(format!(
+            "Collateral market value {} covers debt payoff {}; a liquidation that leaves a $0 remainder must repay the full payoff",
+            pre_priced_market_value_usd, debt_payoff_value_usd
+        ))
+    );
 
     // ---------- 7. USD band vs repay ----------
     // The 100% floor is waived on a write-off, and on a full repay that seizes nothing

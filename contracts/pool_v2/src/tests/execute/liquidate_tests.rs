@@ -1352,11 +1352,13 @@ fn liquidate_full_close_rejects_floored_payoff_rounding_residue() {
 /// The guard must key off the same condition as `bad_debt`, not on an empty collateral map:
 /// a **non-empty** remainder worth $0 (unpriceable leftover) reaches the same write-off path.
 ///
-/// 2000 priced units at 0.355 → $710 market, $568 haircutted against debt 700 → LTV 123%,
-/// liquidatable. Plus 1 unit of an unpriceable denom that cannot be seized. Repaying
-/// floor(s · bi) and seizing the whole priced side leaves that unpriceable unit, so the map is
-/// not empty but is worth nothing. Seized market $710 stays inside the band [700, 714], so the
-/// rejection can only come from the ceiled-payoff guard.
+/// 2000 priced units at $0.30 → $600 market, $480 haircutted against debt 700 → liquidatable.
+/// Plus 1 unit of an unpriceable denom that cannot be seized. After one day the ceiled payoff
+/// is still above $600, so the position is insolvent at market and the solvent-coverage guard
+/// does not apply. Repaying floor(s · bi) and seizing the whole priced side leaves that
+/// unpriceable unit, so the map is not empty but is worth nothing. Seized market $600 stays
+/// inside the bonus cap of a ~700 repay, so the rejection can only come from the ceiled-payoff
+/// guard.
 #[test]
 fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
     let mut deps = mock_provenance_dependencies();
@@ -1413,8 +1415,10 @@ fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
     )
     .expect("borrow");
 
-    // Priced side falls to $710 market (liquidatable), and the second feed goes away entirely.
-    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.355"));
+    // Priced side falls to $600 market, below the ~701 ceiled payoff (insolvent), and the
+    // second feed goes away entirely. $710 would cover the payoff and hit the solvent guard
+    // instead of the one-unit ceiled-payoff check this test locks.
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.30"));
     prices.remove(UNRELIABLE_COLLATERAL);
     set_oracle_prices(&mut deps.querier, prices);
 
@@ -2589,11 +2593,18 @@ fn liquidate_full_close_priced_dust_immediate_haircut() {
     .unwrap();
 }
 
-/// Safety property: full close does not waive the bonus cap. A valuable bag cannot be
-/// emptied by a repay whose bonus multiple is below the bag's market value.
+/// Safety property: full close does not waive the bonus cap. A bag whose market value
+/// exceeds the repay's bonus multiple cannot be emptied, even when that bag is insolvent
+/// so the coverage guard does not apply. At the helper's $0.83 mark ($830 ≥ $600 payoff)
+/// the coverage guard would reject first; $0.50 leaves $500 of market value, below the
+/// payoff and above 102% of repay 374.
 #[test]
 fn liquidate_full_close_valuable_bag_rejected_by_bonus_cap() {
     let (mut deps, env, _, collateral_amount) = setup_liquidatable_borrower();
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.50"));
+    set_oracle_prices(&mut deps.querier, prices);
     let repay_amount = 374u128; // ample repay, so the bonus cap is what rejects
 
     let err = execute(
@@ -3508,4 +3519,266 @@ fn liquidate_permissionless_non_owner_sweeps_priced_worthless_dust() {
         }
         _ => panic!("expected collateral BankMsg"),
     }
+}
+
+/// Debt 990 against 1000 `COLLATERAL_DENOM` (haircut 0.8). Posted at $1.60 (haircutted $1280,
+/// LTV 0.77) then marked to `crash_price`. Same block, so `borrow_index` stays 1 and the
+/// payoff is 990.
+fn setup_debt_990(
+    crash_price: &str,
+) -> (
+    OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    Env,
+) {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        default_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(2_000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.60"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(990),
+        },
+    )
+    .expect("borrow 990 at LTV 0.77");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry(crash_price));
+    set_oracle_prices(&mut deps.querier, prices);
+    (deps, env)
+}
+
+fn position_snapshot(
+    deps: &OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+) -> (u128, BTreeMap<String, u128>, u128, Decimal256, u128) {
+    let storage = deps.as_ref().storage;
+    let reserve = get_reserve_state_v1(storage).unwrap();
+    (
+        get_scaled_borrow(storage, BORROWER).unwrap(),
+        get_borrower_collateral(storage, BORROWER).unwrap().amounts,
+        get_total_collateral_by_asset(storage, COLLATERAL_DENOM).unwrap(),
+        reserve.liquidity_index,
+        reserve.deficit_underlying,
+    )
+}
+
+/// Market value $1000 covers payoff $990. Sending 981 (ceil(1000/1.02)) and seizing all 1000
+/// must not write the residual off.
+#[test]
+fn liquidate_rejects_writeoff_when_priced_collateral_covers_payoff() {
+    let (mut deps, env) = setup_debt_990("1.0");
+    let before = position_snapshot(&deps);
+    assert_eq!(before.0, 990);
+    assert_eq!(before.3, Decimal256::one());
+    assert_eq!(before.4, 0);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(981, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("covers debt payoff"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    assert_eq!(position_snapshot(&deps), before);
+}
+
+#[test]
+fn liquidate_permissionless_non_owner_rejects_writeoff_when_priced_collateral_covers_payoff() {
+    let (mut deps, env) = setup_debt_990("1.0");
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    let before = position_snapshot(&deps);
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(981, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("covers debt payoff"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    assert_eq!(position_snapshot(&deps), before);
+}
+
+/// Same covered position, paying the full 990 payoff, empties the map without a write-off.
+#[test]
+fn liquidate_full_payoff_closes_when_priced_collateral_covers_debt() {
+    let (mut deps, env) = setup_debt_990("1.0");
+    let index_before = get_reserve_state_v1(deps.as_ref().storage)
+        .unwrap()
+        .liquidity_index;
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(990, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("full payoff closes a covered position");
+
+    assert!(res
+        .attributes
+        .iter()
+        .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING));
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .liquidity_index,
+        index_before
+    );
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(amount, &vec![coin(1000, COLLATERAL_DENOM)]);
+        }
+        _ => panic!("expected collateral BankMsg"),
+    }
+}
+
+/// At $0.90 the bag is $900 market, below the $990 payoff. Sending 883 and seizing all 1000
+/// is a real write-off of 107.
+#[test]
+fn liquidate_insolvent_priced_collateral_still_books_bad_debt() {
+    let (mut deps, env) = setup_debt_990("0.90");
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(883, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("insolvent priced bag still writes off");
+
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+            .map(|a| a.value.as_str()),
+        Some("107")
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+}
+
+/// Exactly C = D ($990 market vs payoff 990) still rejects a short repay. The full payoff
+/// is the close that succeeds.
+#[test]
+fn liquidate_rejects_short_repay_when_priced_market_equals_payoff() {
+    let (mut deps, env) = setup_debt_990("0.99");
+    let before = position_snapshot(&deps);
+
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(971, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("covers debt payoff"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    assert_eq!(position_snapshot(&deps), before);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(990, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("full payoff is the close when market value equals the payoff");
+    assert!(res
+        .attributes
+        .iter()
+        .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING));
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
 }

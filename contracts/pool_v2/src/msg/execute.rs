@@ -70,7 +70,9 @@ pub enum ExecuteMsg {
     /// write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full
     /// scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral
     /// value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off,
-    /// or a full repay that seizes nothing, waives the 100% floor. A write-off sweeps every
+    /// or a full repay that seizes nothing, waives the 100% floor. A write-off requires
+    /// pre-seizure priced collateral market value below the debt payoff; otherwise emptying the
+    /// map requires the full payoff. A write-off sweeps every
     /// remaining collateral unit to the liquidator. A full repay leaves that collateral in place.
     Liquidate {
         borrower: String,
