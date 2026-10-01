@@ -3624,6 +3624,101 @@ fn liquidate_rejects_writeoff_when_priced_collateral_covers_payoff() {
     assert_eq!(position_snapshot(&deps), before);
 }
 
+/// Covered collateral (market $1000 vs payoff $990) is not stuck. A partial repay that
+/// leaves a positive remainder is not a write-off: 981/985 sits inside the bonus band and
+/// 973/973 is the 100% floor. Both restore LTV to the margin.
+#[test]
+fn liquidate_covered_position_partial_repay_stays_healthy() {
+    // 981 repay, seize 985: debt left 9, 15 units, haircutted $12, LTV 75%.
+    assert_covered_partial_stays_healthy(981, 985, 9, 15);
+    // 973 repay, seize 973: debt left 17, 27 units, haircutted $21.60, LTV ~78.7%.
+    assert_covered_partial_stays_healthy(973, 973, 17, 27);
+}
+
+fn assert_covered_partial_stays_healthy(
+    repay: u128,
+    seize: u128,
+    debt_left: u128,
+    collateral_left: u128,
+) {
+    let (mut deps, env) = setup_debt_990("1.0");
+    let index_before = get_reserve_state_v1(deps.as_ref().storage)
+        .unwrap()
+        .liquidity_index;
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, seize),
+        },
+    )
+    .unwrap_or_else(|err| {
+        panic!(
+            "partial {}/{} on a covered position: {:?}",
+            repay, seize, err
+        )
+    });
+
+    assert!(
+        res.attributes
+            .iter()
+            .all(|a| a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING),
+        "partial liquidation must not book bad debt"
+    );
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .deficit_underlying,
+        0
+    );
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .liquidity_index,
+        index_before
+    );
+
+    let collateral_after = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(
+        collateral_after.amounts.get(COLLATERAL_DENOM),
+        Some(&collateral_left)
+    );
+    let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let reserve =
+        compute_effective_reserve(deps.as_ref().storage, env.block.time, &contract.rate_params)
+            .unwrap();
+    let debt_after = scaled_to_underlying_borrow(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        reserve.borrow_index,
+    )
+    .unwrap();
+    assert_eq!(debt_after, debt_left);
+    let asset_prices = get_asset_prices_for_borrower(
+        &deps.as_ref().querier,
+        &env.block.time,
+        &contract,
+        &collateral_after,
+    )
+    .unwrap();
+    let (health, ltv) = get_borrower_health(
+        &contract,
+        &contract.supported_collateral_assets,
+        &asset_prices,
+        &collateral_after,
+        Uint128::from(debt_after),
+    )
+    .unwrap();
+    assert_eq!(health, BorrowerHealthV1::Healthy);
+    assert!(
+        ltv <= contract.margin_rate,
+        "LTV {ltv} after {repay}/{seize} must be at or below margin {}",
+        contract.margin_rate
+    );
+}
+
 #[test]
 fn liquidate_permissionless_non_owner_rejects_writeoff_when_priced_collateral_covers_payoff() {
     let (mut deps, env) = setup_debt_990("1.0");
