@@ -11,10 +11,17 @@ use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
 use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
+use crate::utils::compute_effective_reserve;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
-use cosmwasm_std::{coin, Addr, Decimal256, Timestamp, Uint128};
+use cosmwasm_std::{
+    coin, from_json, to_json_binary, Addr, ContractResult, Decimal256, QuerierResult, SystemError,
+    SystemResult, Timestamp, Uint128, WasmQuery,
+};
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
+use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
+use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
 use provwasm_mocks::mock_provenance_dependencies;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -463,13 +470,100 @@ fn update_rate_params_fails_flat_spread_with_non_zero_reserve_factor() {
 const SECONDS_PER_YEAR_RANGE_ERR: &str =
     "rate_params: seconds_per_year must be between 31536000 and 31622400 (365–366 days)";
 
-/// A custodian update with `seconds_per_year = 1` is rejected before indexes accrue, so
-/// stored rate params and reserve timestamps stay put.
+const LENDING_DENOM: &str = "uylds.fcc";
+const COLLATERAL_DENOM: &str = "asset.one";
+
+fn price_entry(price: &str) -> AssetPriceResponseV1 {
+    AssetPriceResponseV1::new(Decimal256::from_str(price).unwrap(), 0, u64::MAX)
+}
+
+fn set_oracle_prices(
+    querier: &mut provwasm_mocks::MockProvenanceQuerier,
+    prices: PriceMapResponse,
+) {
+    let handler = move |query: &WasmQuery| -> QuerierResult {
+        match query {
+            WasmQuery::Smart { contract_addr, msg } => {
+                if contract_addr.as_str() != ORACLE {
+                    return SystemResult::Err(SystemError::NoSuchContract {
+                        addr: contract_addr.to_string(),
+                    });
+                }
+                match from_json::<PriceOracleQueryMsg>(msg) {
+                    Ok(PriceOracleQueryMsg::GetPricesByAsset { .. }) => {
+                        SystemResult::Ok(ContractResult::Ok(to_json_binary(&prices).unwrap()))
+                    }
+                    _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                        kind: "unexpected oracle query".to_string(),
+                    }),
+                }
+            }
+            _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                kind: "expected WasmQuery::Smart".to_string(),
+            }),
+        }
+    };
+    querier.mock_querier.update_wasm(handler);
+}
+
+/// A custodian update with `seconds_per_year = 1` is rejected before indexes accrue.
+/// A day of interest on a live borrow would move both indexes and `last_updated_at` if
+/// `validate()` ran after `update_reserve_indexes`.
 #[test]
 fn update_rate_params_rejects_one_second_year_without_changing_reserve() {
-    let (mut deps, env) = setup_instantiated();
+    let (mut deps, mut env) = setup_instantiated();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1_000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(SOME_USER),
+            &[coin(1_000, COLLATERAL_DENOM)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(SOME_USER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(100),
+        },
+    )
+    .expect("borrow");
+
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86_400);
     let contract_before = get_contract_state_v1(deps.as_ref().storage).unwrap();
     let reserve_before = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    let accrued = compute_effective_reserve(
+        deps.as_ref().storage,
+        env.block.time,
+        &contract_before.rate_params,
+    )
+    .expect("a day of interest is computable");
+    assert_ne!(
+        accrued.borrow_index, reserve_before.borrow_index,
+        "borrow index must be due to move, or this test no longer catches accrual-before-validate"
+    );
+    assert_ne!(
+        accrued.liquidity_index, reserve_before.liquidity_index,
+        "liquidity index must be due to move, or this test no longer catches accrual-before-validate"
+    );
+    assert_ne!(accrued.last_updated_at, reserve_before.last_updated_at);
 
     let finding = RateParamsV1 {
         target_rate: Decimal256::one(),
