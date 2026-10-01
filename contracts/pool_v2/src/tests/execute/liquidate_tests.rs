@@ -4,8 +4,8 @@
 //! precomputed minimum repay), 2% collateral bonus.
 
 use crate::constants::{
-    ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS,
-    ATTRIBUTE_SCALED_AMOUNT,
+    ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_COLLATERAL_JSON, ATTRIBUTE_DEFICIT_UNDERLYING,
+    ATTRIBUTE_LIQUIDATION_ACCESS, ATTRIBUTE_SCALED_AMOUNT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
 };
 use crate::contract::execute;
 use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
@@ -19,7 +19,7 @@ use crate::model::{
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{
     get_borrower_collateral, get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow,
-    set_reserve_state_v1,
+    get_total_collateral_by_asset, set_reserve_state_v1,
 };
 use crate::tests::fixtures::{oracle_price_expired_for, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
@@ -780,7 +780,7 @@ fn liquidate_succeeds_when_one_collateral_price_is_missing() {
     add_unreliable_dust_then_break_feed(&mut deps, &env, false, true);
 
     let min_repay = 374u128;
-    execute(
+    let res = execute(
         deps.as_mut(),
         env,
         message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
@@ -790,6 +790,18 @@ fn liquidate_succeeds_when_one_collateral_price_is_missing() {
         },
     )
     .expect("liquidate should succeed with one missing collateral feed");
+
+    // Partial liquidation: the unpriceable dust stays. A write-off is what sweeps it.
+    let remaining = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(remaining.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    assert!(res
+        .attributes
+        .iter()
+        .all(|a| a.key != ATTRIBUTE_SWEPT_COLLATERAL_JSON));
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -926,27 +938,32 @@ fn liquidate_fails_when_seizing_collateral_beyond_staleness_bound() {
 }
 
 #[test]
+/// Naming an unpriceable denom in the seize is still banned, including when it is the only
+/// holding. The owner resolves that position with an empty seize instead (see the
+/// all-unpriceable write-off tests).
 fn liquidate_fails_when_all_collateral_has_no_stored_price() {
-    let (mut deps, env, _, _) = setup_liquidatable_borrower();
-    let mut prices = HashMap::new();
-    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
-    set_oracle_prices(&mut deps.querier, prices);
+    let (mut deps, env) = setup_only_unreliable_borrower();
+    drop_unreliable_feed(&mut deps, &env, false);
 
-    let min_repay = 374u128;
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
-            collateral_to_seize: collateral_to_seize_success(),
+            collateral_to_seize: seize_all(UNRELIABLE_COLLATERAL, 1000),
         },
     )
     .unwrap_err();
 
     match &err {
         ContractError::IllegalArgumentError { message } => {
-            assert!(message.contains("No priceable collateral"));
+            assert!(
+                message.contains("Cannot seize unpriceable collateral"),
+                "message: {}",
+                message
+            );
+            assert!(message.contains(UNRELIABLE_COLLATERAL));
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
@@ -1448,8 +1465,8 @@ fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
 }
 
 /// Same bag as `liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue`, paying
-/// the ceiled payoff. The 100% floor is waived because the remainder is worth $0, so ceil can
-/// clear scaled debt instead of bouncing off the band.
+/// the ceiled payoff. Scaled debt clears, so this is a full repay, not a write-off: the
+/// unpriceable unit stays with the borrower and is not swept.
 #[test]
 fn liquidate_zero_value_remainder_ceiled_payoff_clears_scaled_debt() {
     let mut deps = mock_provenance_dependencies();
@@ -1544,6 +1561,14 @@ fn liquidate_zero_value_remainder_ceiled_payoff_clears_scaled_debt() {
     let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
     assert!(!leftover.amounts.contains_key(COLLATERAL_DENOM));
     assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    assert!(res
+        .attributes
+        .iter()
+        .all(|a| a.key != ATTRIBUTE_SWEPT_COLLATERAL_JSON));
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        1
+    );
     assert_reserve_assets_liabilities_tie_out(
         deps.as_ref().storage,
         "after ceiled close with $0 remainder",
@@ -1988,8 +2013,8 @@ fn liquidate_bad_debt_writeoff_uses_ceiled_residual() {
 }
 
 /// Same underwater bag as `liquidate_bad_debt_books_deficit_and_clears_scaled_borrow`, plus a
-/// 1-unit unpriceable leftover that cannot be seized. Clearing the priced side leaves residual
-/// debt against a zero-value remainder — that debt must be booked as bad debt, not left live.
+/// 1-unit unpriceable leftover that cannot be seized in the partial. Clearing the priced side
+/// books the residual as bad debt and sweeps that unit, so the borrower map is empty.
 #[test]
 fn liquidate_zero_value_remainder_books_bad_debt() {
     let mut deps = mock_provenance_dependencies();
@@ -2084,8 +2109,35 @@ fn liquidate_zero_value_remainder_books_bad_debt() {
         0
     );
     let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
-    assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
-    assert!(!leftover.amounts.contains_key(COLLATERAL_DENOM));
+    assert!(
+        leftover.amounts.is_empty(),
+        "write-off sweeps the missing-quote remainder"
+    );
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_SWEPT_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(format!("{{\"{}\":\"1\"}}", UNRELIABLE_COLLATERAL).as_str())
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, COLLATERAL_DENOM).unwrap(),
+        0
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        0
+    );
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(
+                amount,
+                &vec![coin(1000, COLLATERAL_DENOM), coin(1, UNRELIABLE_COLLATERAL),]
+            );
+        }
+        _ => panic!("expected collateral BankMsg"),
+    }
     let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(reserve.deficit_underlying, 50);
     assert_reserve_assets_liabilities_tie_out(
@@ -2104,7 +2156,8 @@ fn liquidate_zero_value_remainder_books_bad_debt() {
 /// ($80 haircutted) against debt 600 → liquidatable. Repay 99 and seize all but 1 wei:
 /// seized market ≈ $100 sits inside the band [99, 100.98]. The 1 wei left behind is worth
 /// 0.40 / 10^18 = 4e-19, which truncates to $0 at Decimal256's 18 places — priceable, seizable,
-/// and worth nothing. Residual 501 is booked as bad debt even though the map is not empty.
+/// and worth nothing. Residual 501 is booked as bad debt and that wei is swept, so the map
+/// ends empty.
 #[test]
 fn liquidate_worthless_priceable_remainder_books_bad_debt() {
     let mut deps = mock_provenance_dependencies();
@@ -2186,10 +2239,35 @@ fn liquidate_worthless_priceable_remainder_books_bad_debt() {
     assert_eq!(
         get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
         0,
-        "write-off must clear the borrow even though the map is non-empty"
+        "write-off clears scaled debt and sweeps the worthless remainder"
     );
     let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
-    assert_eq!(leftover.amounts.get(WEI_COLLATERAL), Some(&1));
+    assert!(leftover.amounts.is_empty());
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_SWEPT_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(format!("{{\"{}\":\"1\"}}", WEI_COLLATERAL).as_str())
+    );
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(format!("{{\"{}\":\"{}\"}}", WEI_COLLATERAL, wei_amount - 1).as_str())
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, WEI_COLLATERAL).unwrap(),
+        0
+    );
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(amount, &vec![coin(wei_amount, WEI_COLLATERAL)]);
+        }
+        _ => panic!("expected collateral BankMsg"),
+    }
     let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(reserve.deficit_underlying, 501);
     assert_reserve_assets_liabilities_tie_out(
@@ -2290,6 +2368,14 @@ fn liquidate_full_repay_with_unpriceable_remainder_does_not_book_bad_debt() {
     );
     let leftover = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
     assert_eq!(leftover.amounts.get(UNRELIABLE_COLLATERAL), Some(&1));
+    assert!(res
+        .attributes
+        .iter()
+        .all(|a| a.key != ATTRIBUTE_SWEPT_COLLATERAL_JSON));
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        1
+    );
     let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(reserve.deficit_underlying, 0);
     assert_reserve_assets_liabilities_tie_out(
@@ -2400,9 +2486,9 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
 
 // --- Full close: waive 100% floor when seizure empties the collateral map ---
 
-/// Invariant: a full seizure with residual debt zeros `scaled_borrow` in the same
-/// transaction (empty map + leftover debt is not a reachable post-state). A zero-value
-/// remainder (unpriceable leftover) is the same: see `liquidate_zero_value_remainder_books_bad_debt`.
+/// Invariant: bad debt and a non-empty borrower map is not a reachable post-state. A write-off
+/// zeros `scaled_borrow` and sweeps every remaining unit in the same transaction. See
+/// `liquidate_zero_value_remainder_books_bad_debt`.
 #[test]
 fn liquidate_full_close_priced_dust_books_deficit() {
     let (mut deps, env) = setup_priced_dust_borrower(BadDebtLossAllocation::DeferredToDeficit);
@@ -2730,5 +2816,647 @@ fn liquidate_full_close_18_decimal_cheap_display_rejected_by_bonus_cap() {
             );
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+/// Borrower holds only 1000 `UNRELIABLE_COLLATERAL` (haircut 0.8) and owes 600 (LTV 0.75).
+fn setup_only_unreliable_borrower() -> (
+    OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    Env,
+) {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        default_instantiate_msg(),
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1000, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add unreliable collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(600),
+        },
+    )
+    .expect("borrow");
+    (deps, env)
+}
+
+fn drop_unreliable_feed(
+    deps: &mut OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    env: &Env,
+    expire_last_known: bool,
+) {
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    if expire_last_known {
+        prices.insert(
+            UNRELIABLE_COLLATERAL.to_string(),
+            oracle_price_expired_for(
+                Decimal256::from_str("1.0").unwrap(),
+                env.block.time,
+                DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+            ),
+        );
+    }
+    set_oracle_prices(&mut deps.querier, prices);
+}
+
+fn assert_all_unreliable_swept(
+    deps: &OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    res: &cosmwasm_std::Response,
+) {
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+            .map(|a| a.value.as_str()),
+        Some("599")
+    );
+    let storage = deps.as_ref().storage;
+    assert_eq!(get_scaled_borrow(storage, BORROWER).unwrap(), 0);
+    assert!(get_borrower_collateral(storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    assert_eq!(
+        get_total_collateral_by_asset(storage, UNRELIABLE_COLLATERAL).unwrap(),
+        0
+    );
+    let swept = format!("{{\"{}\":\"1000\"}}", UNRELIABLE_COLLATERAL);
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_SWEPT_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(swept.as_str())
+    );
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some("{}")
+    );
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(amount, &vec![coin(1000, UNRELIABLE_COLLATERAL)]);
+        }
+        _ => panic!("expected collateral BankMsg"),
+    }
+}
+
+#[test]
+fn liquidate_owner_resolves_all_unpriceable_missing_feed() {
+    let (mut deps, env) = setup_only_unreliable_borrower();
+    drop_unreliable_feed(&mut deps, &env, false);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: BTreeMap::new(),
+        },
+    )
+    .expect("owner empty seize writes off an all-unpriceable position");
+
+    assert_all_unreliable_swept(&deps, &res);
+}
+
+#[test]
+fn liquidate_owner_resolves_all_unpriceable_expired_last_known() {
+    let (mut deps, env) = setup_only_unreliable_borrower();
+    drop_unreliable_feed(&mut deps, &env, true);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: BTreeMap::new(),
+        },
+    )
+    .expect("owner empty seize writes off an expired-only position");
+
+    assert_all_unreliable_swept(&deps, &res);
+}
+
+#[test]
+fn liquidate_permissionless_rejects_non_owner_all_unpriceable() {
+    let (mut deps, env) = setup_only_unreliable_borrower();
+    drop_unreliable_feed(&mut deps, &env, false);
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+
+    let scaled = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    let total =
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(1, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: BTreeMap::new(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_UNPRICEABLE_ERR
+    ));
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        scaled
+    );
+    assert_eq!(
+        get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap(),
+        collateral
+    );
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage).unwrap(),
+        reserve
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        total
+    );
+}
+
+/// Worked example: 1000 A (haircut 0.8) and 1000 B (no haircut) at $1, borrow 1440.
+/// A falls to $0.70 and B expires past the liquidation bound. Repay 687 seizes all of A;
+/// the $0 remainder is a write-off of 753 that must sweep B.
+fn setup_mixed_writeoff_bug() -> (
+    OwnedDeps<MemoryStorage, MockApi, provwasm_mocks::MockProvenanceQuerier>,
+    Env,
+) {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+    let mut msg = default_instantiate_msg();
+    for asset in &mut msg.supported_collateral_assets {
+        if asset.asset_id == UNRELIABLE_COLLATERAL {
+            asset.haircut = None;
+        }
+    }
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(2_000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add A");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1000, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add B");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(1440),
+        },
+    )
+    .expect("borrow 1440 at the margin");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.70"));
+    prices.insert(
+        UNRELIABLE_COLLATERAL.to_string(),
+        oracle_price_expired_for(
+            Decimal256::from_str("1.0").unwrap(),
+            env.block.time,
+            DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS + 1,
+        ),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+    (deps, env)
+}
+
+fn bug_example_seize() -> BTreeMap<String, Uint128> {
+    seize_all(COLLATERAL_DENOM, 1000)
+}
+
+#[test]
+fn liquidate_permissionless_non_owner_cannot_write_off_unpriceable_remainder() {
+    let (mut deps, env) = setup_mixed_writeoff_bug();
+    let scaled = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
+    let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    let total_a = get_total_collateral_by_asset(deps.as_ref().storage, COLLATERAL_DENOM).unwrap();
+    let total_b =
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(687, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: bug_example_seize(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_UNPRICEABLE_ERR
+    ));
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        scaled
+    );
+    assert_eq!(
+        get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap(),
+        collateral
+    );
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage).unwrap(),
+        reserve
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, COLLATERAL_DENOM).unwrap(),
+        total_a
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        total_b
+    );
+}
+
+#[test]
+fn liquidate_owner_writeoff_sweeps_unpriceable_remainder() {
+    let (mut deps, env) = setup_mixed_writeoff_bug();
+    let reserve_before = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve_before.borrow_index, Decimal256::one());
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(687, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: bug_example_seize(),
+        },
+    )
+    .expect("owner write-off sweeps both assets");
+
+    let repay = Decimal256::from_ratio(687u128, 1u128);
+    let seized_market = Decimal256::from_ratio(700u128, 1u128);
+    assert!(
+        seized_market
+            <= repay
+                .checked_mul(Decimal256::from_ratio(102u128, 100u128))
+                .unwrap(),
+        "seized market must stay inside the bonus cap"
+    );
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+            .map(|a| a.value.as_str()),
+        Some("753")
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, COLLATERAL_DENOM).unwrap(),
+        0
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        0
+    );
+    let swept = format!("{{\"{}\":\"1000\"}}", UNRELIABLE_COLLATERAL);
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_SWEPT_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(swept.as_str())
+    );
+    let seized = format!("{{\"{}\":\"1000\"}}", COLLATERAL_DENOM);
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(seized.as_str())
+    );
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(
+                amount,
+                &vec![
+                    coin(1000, COLLATERAL_DENOM),
+                    coin(1000, UNRELIABLE_COLLATERAL),
+                ]
+            );
+        }
+        _ => panic!("expected collateral BankMsg"),
+    }
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .borrow_index,
+        Decimal256::one()
+    );
+
+    let mut to_remove = BTreeMap::new();
+    to_remove.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(1000));
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral { to_remove },
+    )
+    .unwrap_err();
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("Insufficient collateral"),
+                "message: {}",
+                message
+            );
+        }
+        _ => panic!("expected RemoveCollateral to fail, got {:?}", err),
+    }
+}
+
+/// Same underwater bag as `liquidate_zero_value_remainder_books_bad_debt`, but the leftover
+/// quote is a stored zero rather than a missing feed. The unit is still swept.
+#[test]
+fn liquidate_zero_quote_remainder_is_swept() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    let mut msg = instantiate_msg_full_haircut_collateral();
+    msg.supported_collateral_assets.push(CollateralAssetV1 {
+        asset_id: UNRELIABLE_COLLATERAL.to_string(),
+        haircut: None,
+    });
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(1000, COLLATERAL_DENOM)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add priced collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add dust of second collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(700),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(COLLATERAL_DENOM.to_string(), price_entry("0.65"));
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("0"));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(650, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+        },
+    )
+    .expect("zero-quote remainder is swept with the write-off");
+
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+            .map(|a| a.value.as_str()),
+        Some("50")
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        0
+    );
+    let swept = format!("{{\"{}\":\"1\"}}", UNRELIABLE_COLLATERAL);
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_SWEPT_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(swept.as_str())
+    );
+}
+
+/// Permissionless non-owner may write off a remainder that is priceable and worth $0.
+/// That dust is swept to the sender; nothing unpriceable is involved, so the owner gate stays shut.
+#[test]
+fn liquidate_permissionless_non_owner_sweeps_priced_worthless_dust() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let env = mock_env();
+
+    instantiate_contract(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        instantiate_msg_with_wei_collateral(),
+    )
+    .expect("instantiate");
+    set_liquidation_access(&mut deps, env.clone(), LiquidationAccess::Permissionless);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(1000, LENDING_DENOM)]),
+        ExecuteMsg::Lend {},
+    )
+    .expect("lend");
+
+    let wei_amount = 250 * ONE_WHOLE_18;
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(WEI_COLLATERAL.to_string(), display_price("10.0", 18));
+    set_oracle_prices(&mut deps.querier, prices.clone());
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(wei_amount, WEI_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add_collateral");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(600),
+        },
+    )
+    .expect("borrow");
+
+    prices.insert(WEI_COLLATERAL.to_string(), display_price("0.40", 18));
+    set_oracle_prices(&mut deps.querier, prices);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(99, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount - 1),
+        },
+    )
+    .expect("non-owner sweeps priced worthless dust");
+
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_BAD_DEBT_UNDERLYING)
+            .map(|a| a.value.as_str()),
+        Some("501")
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_borrower_collateral(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .amounts
+        .is_empty());
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, WEI_COLLATERAL).unwrap(),
+        0
+    );
+    let swept = format!("{{\"{}\":\"1\"}}", WEI_COLLATERAL);
+    assert_eq!(
+        res.attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_SWEPT_COLLATERAL_JSON)
+            .map(|a| a.value.as_str()),
+        Some(swept.as_str())
+    );
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OTHER);
+            assert_eq!(amount, &vec![coin(wei_amount, WEI_COLLATERAL)]);
+        }
+        _ => panic!("expected collateral BankMsg"),
     }
 }

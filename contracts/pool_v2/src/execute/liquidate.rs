@@ -6,17 +6,22 @@
 //! counting unpriceable holdings at their retained last-known (too-old, non-zero) quotes.
 //! A dropped feed with **no** stored quote, or a last-known that would pull LTV back
 //! below the liquidation rate, still requires the owner — so a stranger cannot seize
-//! the priced remainder of a solvent mixed bag. Dust of a dead feed does not move LTV
+//! the priced remainder of a solvent mixed bag. A write-off that would sweep unpriceable
+//! collateral also requires the owner. Dust of a dead feed does not move LTV
 //! and does not disable permissionless. The liquidator repays debt and chooses which
 //! collateral to seize. The **market value**
 //! (`display_price_usd × amount / 10^precision`, no haircut) of seized collateral must be
 //! 100% to `liquidation_bonus_rate` of the repay value
 //! (e.g. 1.02 = 2% cap; ensures liquidator profit does not exceed the intended bonus).
-//! A remainder worth **$0** after the seizure (empty map, or leftover with no haircutted USD)
-//! waives only the 100% floor; the bonus cap still applies, so a repay that actually reduces
-//! scaled debt can empty only a dust bag. A 1-atom repay is rejected once `borrow_index > 1`,
-//! because it floors to zero scaled units. Residual debt against that remainder is booked
-//! in the same transaction via `bad_debt_loss_allocation`.
+//! A remainder worth **$0** after the seizure waives only the 100% floor; the bonus cap still
+//! applies, so a repay that actually reduces scaled debt can empty only a dust bag. A 1-atom
+//! repay is rejected once `borrow_index > 1`, because it floors to zero scaled units. Residual
+//! debt against that remainder is booked in the same transaction via `bad_debt_loss_allocation`,
+//! and every remaining collateral unit is swept to the liquidator. Invariant: `bad_debt` implies
+//! an empty borrower map. A full repay (`new_scaled_debt == 0`) is not a write-off and does not
+//! sweep. Unpriceable collateral is not seizable in a partial liquidation; it is swept on a
+//! write-off. A position holding only unpriceable collateral is resolved by the owner with an
+//! empty seize and any positive repay.
 //!
 //! **How much must be repaid:** there is no closed-form minimum. Actual repay is
 //! `min(sent, ceil(scaled × borrow_index))`. The repay plus seizure must leave the borrower
@@ -24,9 +29,10 @@
 //! `new_scaled_debt`) rather than predicted up front. Full repayment, a full close, and a
 //! remainder whose haircutted USD is zero (unpriceable leftover, or priceable leftover that
 //! truncates to $0) are exempt from that health check — residual debt against a zero-value
-//! bag is booked as bad debt in the same tx. The attached amount must reduce scaled debt;
-//! sub-index repayments are rejected before collateral can be seized. Cancelling all scaled
-//! debt requires the ceiled payoff, whether or not the collateral map empties.
+//! bag is booked as bad debt in the same tx and the leftover units are swept. The attached
+//! amount must reduce scaled debt; sub-index repayments are rejected before collateral can be
+//! seized. Cancelling all scaled debt requires the ceiled payoff, whether or not the collateral
+//! map empties.
 //!
 //! An earlier formula, `r = (D - margin_rate*C) / (1 - liquidation_bonus_rate*margin_rate)`,
 //! mixed units: `C` is haircutted collateral USD, but the seizure band bounds the seizure by
@@ -38,16 +44,17 @@
 //! real post-state instead.
 //!
 //! Collateral with **no stored** oracle price, a **zero** stored price, or last-known older than
-//! `max_liquidation_staleness_seconds`, is valued at zero for LTV and cannot
-//! be seized. A **stale** stored price still within that bound is used as last-known (not fatal)
-//! so liquidations are not frozen by a paused feed. The lending denom must have a stored price
-//! within the same bound.
+//! `max_liquidation_staleness_seconds`, is valued at zero for LTV. It is not seizable in a
+//! partial liquidation; it is swept on a write-off. A **stale** stored price still within that
+//! bound is used as last-known (not fatal) so liquidations are not frozen by a paused feed. The
+//! lending denom must have a stored price within the same bound.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
-//! liquidatable → mixed-bag owner gate (load-bearing unpriceable only) → lending price →
-//! sent funds and scaled repay → per-asset checks and dry-run post-seizure → value band
-//! (100% floor waived when the remainder is worth $0) → post-state health → persist reserve and collateral →
-//! response (collateral send + attrs) → refund excess lending.
+//! liquidatable → lending price → sent funds and scaled repay → per-asset checks and dry-run
+//! post-seizure → `bad_debt` → owner gate (load-bearing unpriceable, or a write-off that would
+//! sweep unpriceable collateral) → value band (100% floor waived on `bad_debt`) → post-state
+//! health → persist reserve, sweep the remainder on `bad_debt`, collateral → response
+//! (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
 //! vs **immediate** (pro-rata `liquidity_index` haircut in the same tx; see `apply_pro_rata_liquidity_index_haircut`).
@@ -56,7 +63,7 @@ use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION,
     ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_BORROWER, ATTRIBUTE_COLLATERAL_JSON,
     ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS, ATTRIBUTE_LIQUIDATOR,
-    ATTRIBUTE_SCALED_AMOUNT,
+    ATTRIBUTE_SCALED_AMOUNT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
 };
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
@@ -73,7 +80,7 @@ use crate::utils::{
     update_reserve_indexes, validate_single_coin_denom, LiquidationPrices, WithRates,
 };
 use cosmwasm_std::{
-    ensure, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Uint128,
+    ensure, Addr, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Storage, Uint128,
 };
 use democratized_prime_lib::common::assert_owner;
 use std::collections::{BTreeMap, HashSet};
@@ -81,17 +88,18 @@ use std::collections::{BTreeMap, HashSet};
 pub const ACTION: &str = "liquidate";
 pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may liquidate";
 pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
-    "Only the contract owner may liquidate when unpriceable collateral is load-bearing";
+    "Only the contract owner may liquidate when unpriceable collateral is load-bearing or a write-off would sweep it";
 
 /// Liquidate a borrower whose LTV ≥ liquidation_rate. Auth follows [`LiquidationAccess`].
 /// Permissionless still requires the owner when unpriceable collateral is load-bearing
 /// (counting last-known of dropped feeds would make the position not liquidatable, or a
-/// dropped feed has no stored quote).
+/// dropped feed has no stored quote), or when a write-off would sweep unpriceable collateral.
 /// Repay debt from funds and seize collateral per `collateral_to_seize`; market value must be
-/// 100%–liquidation_bonus_rate of repay, except a $0 remainder waives the 100% floor (bonus cap
+/// 100%–liquidation_bonus_rate of repay, except a write-off waives the 100% floor (bonus cap
 /// still applies). The resulting post-state must be at or below `margin_rate` — there is no
-/// precomputed minimum repay. Residual debt against an empty or zero-value remainder is booked
-/// as bad debt. See module doc for flow.
+/// precomputed minimum repay. Residual debt against a zero-value remainder is booked as bad
+/// debt and every remaining unit is swept to the liquidator. An empty seize is allowed only
+/// when the borrower holds nothing priceable. See module doc for flow.
 pub fn liquidate(
     deps: DepsMut,
     env: Env,
@@ -137,16 +145,12 @@ pub fn liquidate(
         &borrower_collateral,
     )?;
     let asset_prices = &quoted.prices;
-    let has_priceable_collateral = borrower_collateral
+    // Nothing priceable: an empty seize is the owner write-off. A non-zero entry still
+    // hits the seize ban below. A priced holding with an empty seize is still rejected.
+    let holds_priceable_collateral = borrower_collateral
         .amounts
         .iter()
         .any(|(id, amt)| *amt > 0 && !quoted.unpriceable.contains(id));
-    ensure!(
-        has_priceable_collateral,
-        illegal_argument(
-            "No priceable collateral (all held assets have no stored, zero, or over-stale oracle price)",
-        )
-    );
     let (health, _ltv) = get_borrower_health(
         &contract,
         &contract.supported_collateral_assets,
@@ -158,16 +162,6 @@ pub fn liquidate(
         health == BorrowerHealthV1::Liquidatable,
         illegal_argument("Borrower is not liquidatable (LTV below liquidation rate)")
     );
-    // Unpriceable holdings are omitted from the acted-on USD, which inflates LTV. Require
-    // the owner when counting retained last-knowns would make the position not liquidatable
-    // (or a dropped feed has no stored quote). Dust of a dead feed does not trip this.
-    if matches!(
-        contract.liquidation_access,
-        LiquidationAccess::Permissionless
-    ) && unpriceable_is_load_bearing(&contract, &quoted, &borrower_collateral, debt_underlying)?
-    {
-        assert_owner(deps.storage, &info.sender, ASSERT_OWNER_UNPRICEABLE_ERR)?;
-    }
 
     // ---------- 4. Lending denom price (repay valuation for the seizure band) ----------
     let price_lending = asset_prices
@@ -207,10 +201,14 @@ pub fn liquidate(
     let actual_repay_value_usd = price_lending.value_usd(actual_repay_underlying)?;
     let min_collateral_value_required = actual_repay_value_usd; // 100% of repay value
     let max_collateral_value_allowed = actual_repay_value_usd.checked_mul(bonus)?;
-    ensure!(
-        !collateral_to_seize.is_empty(),
-        illegal_argument("collateral_to_seize must specify at least one asset and amount",)
-    );
+    let positive_seize_requested = collateral_to_seize.values().any(|amt| !amt.is_zero());
+    let allow_empty_seize = !holds_priceable_collateral && !positive_seize_requested;
+    if !allow_empty_seize {
+        ensure!(
+            !collateral_to_seize.is_empty(),
+            illegal_argument("collateral_to_seize must specify at least one asset and amount",)
+        );
+    }
 
     let supported_ids: HashSet<_> = contract
         .supported_collateral_assets
@@ -262,12 +260,14 @@ pub fn liquidate(
         .filter(|(_, amt)| !amt.is_zero())
         .map(|(id, amt)| (id.clone(), amt.u128()))
         .collect();
-    ensure!(
-        !to_seize.is_empty(),
-        illegal_argument(
-            "collateral_to_seize must contain at least one asset with positive amount",
-        )
-    );
+    if !allow_empty_seize {
+        ensure!(
+            !to_seize.is_empty(),
+            illegal_argument(
+                "collateral_to_seize must contain at least one asset with positive amount",
+            )
+        );
+    }
 
     // Dry-run remaining borrower collateral after this seizure (detect a $0 remainder
     // before the value band, so the 100% floor can be waived when nothing of value is left).
@@ -291,10 +291,23 @@ pub fn liquidate(
         asset_prices,
         &contract.supported_collateral_assets,
     )?;
+    // One definition, used by the owner gate, the floor waiver, the ceiled-payoff guard,
+    // the health exemption, and persistence. A full repay is not a write-off.
+    let bad_debt = new_scaled_debt > 0 && post_collateral_value_usd.is_zero();
+    require_owner_for_unpriceable(
+        deps.storage,
+        &info.sender,
+        &contract,
+        &quoted,
+        &borrower_collateral,
+        debt_underlying,
+        bad_debt,
+        &post_collateral,
+    )?;
 
-    // ---------- 7. USD band vs repay (100% floor waived when the remainder is worth $0) ----------
+    // ---------- 7. USD band vs repay (100% floor waived on a write-off) ----------
     ensure!(
-        post_collateral_value_usd.is_zero() || seized_value_usd >= min_collateral_value_required,
+        bad_debt || seized_value_usd >= min_collateral_value_required,
         illegal_argument(format!(
             "Collateral to seize value {} is below required 100% of repay value {} \
              (waived only when the seizure leaves a remainder worth nothing)",
@@ -311,30 +324,21 @@ pub fn liquidate(
 
     // ---------- 7b. Post-state health: the seizure must actually restore the position ----------
     // Replaces the old closed-form minimum repay (see module doc). Checking the real post-state
-    // is haircut-correct by construction, so a liquidator can now bring the borrower to exactly
-    // margin_rate, and it handles multi-asset seizures whose haircuts differ. Exempt: a full
-    // close (no collateral left to be healthy about), a full repayment (no debt left), and a
-    // remainder whose haircutted USD is zero. `calculate_ltv` returns the sentinel 1 on a
-    // zero-value bag, which would classify Liquidatable and strand the position — unpriceable
-    // leftover cannot be seized, and a haircut that truncates remaining units to $0 contributes
-    // nothing to LTV. Residual debt against that bag is booked as bad debt below (same as a
-    // full close), so it does not sit on the books unallocated. Not exploitable: the band still
-    // charges ~full market value for the priced collateral that is taken.
+    // is haircut-correct by construction, so a liquidator can bring the borrower to exactly
+    // margin_rate, including multi-asset seizures whose haircuts differ. Exempt when `bad_debt`
+    // (the $0 remainder is swept below) or when the repay clears scaled debt.
 
-    // A remainder worth nothing routes residual scaled debt to the bad-debt path below. If the
-    // liquidator supplied the floored debt but not the ceiled payoff, that residual is a one-unit
-    // rounding artefact, not insolvency — reject rather than book it as a loss. This must key off
-    // the same condition as `bad_debt`; an empty map is only one way to reach $0.
+    // A write-off routes residual scaled debt to the bad-debt path below. If the liquidator
+    // supplied the floored debt but not the ceiled payoff, that residual is a one-unit rounding
+    // artefact, not insolvency — reject rather than book it as a loss and sweep collateral.
     ensure!(
-        !(post_collateral_value_usd.is_zero()
-            && sent_u128 >= debt_underlying
-            && sent_u128 < debt_payoff),
+        !(bad_debt && sent_u128 >= debt_underlying && sent_u128 < debt_payoff),
         illegal_argument(
             "Cancelling all scaled debt against a zero-value remainder requires the ceiled payoff amount",
         )
     );
 
-    if new_scaled_debt > 0 && !post_collateral_value_usd.is_zero() {
+    if new_scaled_debt > 0 && !bad_debt {
         let post_debt_underlying =
             scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?;
         let (post_health, post_ltv) = get_borrower_health(
@@ -357,10 +361,6 @@ pub fn liquidate(
         );
     }
 
-    // Empty map or remaining collateral with no haircutted USD: leftover scaled debt is a
-    // loss to book, not a live borrow. An empty map is the usual case; a mixed bag that
-    // clears every priceable unit (or a remainder that haircuts to $0) hits the same path.
-    let bad_debt = new_scaled_debt > 0 && post_collateral_value_usd.is_zero();
     let bad_debt_underlying_amt = if bad_debt {
         // Cover the aggregate floor drop from cancelling `new_scaled_debt`. `floor(s' · bi)` can
         // be 1 short of `floor(T · bi) − floor((T − s') · bi)`; ceil is at most 1 over exact and
@@ -402,19 +402,43 @@ pub fn liquidate(
     }
     set_reserve_state_v1(deps.storage, &reserve)?;
 
-    let mut send_coins: Vec<Coin> = Vec::with_capacity(to_seize.len());
+    // Requested seizure and the write-off sweep share one BankMsg. Swept units are not part of
+    // `seized_value_usd` (already checked) and are not part of `collateral_json`.
+    let mut outgoing: BTreeMap<String, u128> = BTreeMap::new();
     for (asset_id, seize_amt) in &to_seize {
+        add_outgoing_amount(&mut outgoing, asset_id, *seize_amt)?;
         subtract_total_collateral(deps.storage, asset_id, *seize_amt)?;
-        send_coins.push(Coin {
-            denom: asset_id.clone(),
-            amount: Uint128::from(*seize_amt),
-        });
     }
-    set_borrower_collateral(deps.storage, borrower_key, &post_collateral)?;
+    let mut swept_json: BTreeMap<String, String> = BTreeMap::new();
+    if bad_debt {
+        for (asset_id, amt) in &post_collateral.amounts {
+            if *amt == 0 {
+                continue;
+            }
+            add_outgoing_amount(&mut outgoing, asset_id, *amt)?;
+            subtract_total_collateral(deps.storage, asset_id, *amt)?;
+            swept_json.insert(asset_id.clone(), amt.to_string());
+        }
+    }
+    let stored_collateral = if bad_debt {
+        BorrowerCollateralV1 {
+            amounts: BTreeMap::new(),
+        }
+    } else {
+        post_collateral
+    };
+    set_borrower_collateral(deps.storage, borrower_key, &stored_collateral)?;
 
-    let collateral_json: BTreeMap<String, String> = send_coins
+    let send_coins: Vec<Coin> = outgoing
+        .into_iter()
+        .map(|(denom, amount)| Coin {
+            denom,
+            amount: Uint128::from(amount),
+        })
+        .collect();
+    let collateral_json: BTreeMap<String, String> = to_seize
         .iter()
-        .map(|c| (c.denom.clone(), c.amount.to_string()))
+        .map(|(id, amt)| (id.clone(), amt.to_string()))
         .collect();
 
     // ---------- 9. Response: collateral BankMsg, standard attributes, optional bad-debt attributes ----------
@@ -450,6 +474,12 @@ pub fn liquidate(
                 ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION,
                 contract.bad_debt_loss_allocation.as_str(),
             );
+        if !swept_json.is_empty() {
+            res = res.add_attribute(
+                ATTRIBUTE_SWEPT_COLLATERAL_JSON,
+                serde_json::to_string(&swept_json).unwrap_or_default(),
+            );
+        }
     }
 
     // ---------- 10. Refund excess lending (sent amount above applied repay) ----------
@@ -494,4 +524,48 @@ fn unpriceable_is_load_bearing(
         Uint128::from(debt_underlying),
     )?;
     Ok(health != BorrowerHealthV1::Liquidatable)
+}
+
+/// Permissionless owner gate, after the dry-run and before the value band so an auth failure
+/// still precedes a band failure. Owner-only is already enforced in step 1.
+#[allow(clippy::too_many_arguments)]
+fn require_owner_for_unpriceable(
+    storage: &dyn Storage,
+    sender: &Addr,
+    contract: &ContractStateV1,
+    quoted: &LiquidationPrices,
+    pre_collateral: &BorrowerCollateralV1,
+    debt_underlying: u128,
+    bad_debt: bool,
+    post_collateral: &BorrowerCollateralV1,
+) -> Result<(), ContractError> {
+    if !matches!(
+        contract.liquidation_access,
+        LiquidationAccess::Permissionless
+    ) {
+        return Ok(());
+    }
+    let writeoff_sweeps_unpriceable = bad_debt
+        && post_collateral
+            .amounts
+            .iter()
+            .any(|(id, amt)| *amt > 0 && quoted.unpriceable.contains(id));
+    if unpriceable_is_load_bearing(contract, quoted, pre_collateral, debt_underlying)?
+        || writeoff_sweeps_unpriceable
+    {
+        assert_owner(storage, sender, ASSERT_OWNER_UNPRICEABLE_ERR)?;
+    }
+    Ok(())
+}
+
+fn add_outgoing_amount(
+    outgoing: &mut BTreeMap<String, u128>,
+    denom: &str,
+    amount: u128,
+) -> Result<(), ContractError> {
+    let slot = outgoing.entry(denom.to_string()).or_insert(0);
+    *slot = slot
+        .checked_add(amount)
+        .ok_or_else(|| illegal_state("outgoing collateral amount overflow"))?;
+    Ok(())
 }

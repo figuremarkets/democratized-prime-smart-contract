@@ -66,13 +66,15 @@ pub enum ExecuteMsg {
     },
 
     /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
-    /// Permissionless still requires the owner when unpriceable collateral is load-bearing.
-    /// Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is
-    /// `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in
-    /// [100%, liquidation_bonus_rate] of the amount repaid, except a $0 remainder waives the 100% floor.
+    /// Permissionless still requires the owner when unpriceable collateral is load-bearing or a
+    /// write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full
+    /// scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral
+    /// value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off
+    /// waives the 100% floor. A write-off sweeps every remaining collateral unit to the liquidator.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.
+        /// Empty (or all zeros) is allowed only for an all-unpriceable owner write-off.
         collateral_to_seize: BTreeMap<String, Uint128>,
     },
 
