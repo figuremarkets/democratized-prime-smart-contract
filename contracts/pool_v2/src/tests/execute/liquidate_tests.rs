@@ -2973,6 +2973,55 @@ fn liquidate_owner_resolves_all_unpriceable_expired_last_known() {
     assert_all_unreliable_swept(&deps, &res);
 }
 
+/// Full repay is not a write-off. The owner can pay an all-unpriceable position off with an
+/// empty seize: no collateral moves, and an overpay is only the lending refund.
+#[test]
+fn liquidate_owner_full_repay_all_unpriceable_sends_no_collateral() {
+    let (mut deps, env) = setup_only_unreliable_borrower();
+    drop_unreliable_feed(&mut deps, &env, false);
+    let total_before =
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap();
+
+    // Ceiled payoff is 600 at index 1. Send 601 so the only BankMsg is the 1-unit refund.
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[coin(601, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: BTreeMap::new(),
+        },
+    )
+    .expect("owner full repay of an all-unpriceable position");
+
+    assert_eq!(res.messages.len(), 1);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(amount, &vec![coin(1, LENDING_DENOM)]);
+        }
+        other => panic!("expected only the excess refund, got {:?}", other),
+    }
+    assert!(res.attributes.iter().all(|a| {
+        a.key != ATTRIBUTE_BAD_DEBT_UNDERLYING && a.key != ATTRIBUTE_SWEPT_COLLATERAL_JSON
+    }));
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert_eq!(
+        get_borrower_collateral(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .amounts
+            .get(UNRELIABLE_COLLATERAL),
+        Some(&1000)
+    );
+    assert_eq!(
+        get_total_collateral_by_asset(deps.as_ref().storage, UNRELIABLE_COLLATERAL).unwrap(),
+        total_before
+    );
+}
+
 #[test]
 fn liquidate_permissionless_rejects_non_owner_all_unpriceable() {
     let (mut deps, env) = setup_only_unreliable_borrower();

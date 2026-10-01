@@ -52,7 +52,8 @@
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
 //! liquidatable → lending price → sent funds and scaled repay → per-asset checks and dry-run
 //! post-seizure → `bad_debt` → owner gate (load-bearing unpriceable, or a write-off that would
-//! sweep unpriceable collateral) → value band (100% floor waived on `bad_debt`) → post-state
+//! sweep unpriceable collateral) → value band (100% floor waived on `bad_debt`, or a full
+//! repay that seizes nothing) → post-state
 //! health → persist reserve, sweep the remainder on `bad_debt`, collateral → response
 //! (collateral send + attrs) → refund excess lending.
 //!
@@ -95,10 +96,11 @@ pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
 /// (counting last-known of dropped feeds would make the position not liquidatable, or a
 /// dropped feed has no stored quote), or when a write-off would sweep unpriceable collateral.
 /// Repay debt from funds and seize collateral per `collateral_to_seize`; market value must be
-/// 100%–liquidation_bonus_rate of repay, except a write-off waives the 100% floor (bonus cap
-/// still applies). The resulting post-state must be at or below `margin_rate` — there is no
-/// precomputed minimum repay. Residual debt against a zero-value remainder is booked as bad
-/// debt and every remaining unit is swept to the liquidator. An empty seize is allowed only
+/// 100%–liquidation_bonus_rate of repay, except a write-off, or a full repay that seizes
+/// nothing, waives the 100% floor (bonus cap still applies). The resulting post-state must be
+/// at or below `margin_rate` — there is no precomputed minimum repay. Residual debt against a
+/// zero-value remainder is booked as bad debt and every remaining unit is swept to the
+/// liquidator. An empty seize is allowed only
 /// when the borrower holds nothing priceable. See module doc for flow.
 pub fn liquidate(
     deps: DepsMut,
@@ -305,12 +307,15 @@ pub fn liquidate(
         &post_collateral,
     )?;
 
-    // ---------- 7. USD band vs repay (100% floor waived on a write-off) ----------
+    // ---------- 7. USD band vs repay ----------
+    // The 100% floor is waived on a write-off, and on a full repay that seizes nothing
+    // (the owner paying an all-unpriceable position off and leaving the collateral).
+    let floor_waived = bad_debt || (new_scaled_debt == 0 && seized_value_usd.is_zero());
     ensure!(
-        bad_debt || seized_value_usd >= min_collateral_value_required,
+        floor_waived || seized_value_usd >= min_collateral_value_required,
         illegal_argument(format!(
             "Collateral to seize value {} is below required 100% of repay value {} \
-             (waived only when the seizure leaves a remainder worth nothing)",
+             (waived on a write-off, or when the repay clears scaled debt and seizes nothing)",
             seized_value_usd, min_collateral_value_required
         ))
     );
