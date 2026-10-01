@@ -103,7 +103,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Permissionless still requires the owner when unpriceable collateral is load-bearing. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a $0 remainder waives the 100% floor.",
+      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default liquidator-only). Permissionless still requires the owner when unpriceable collateral is load-bearing. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a $0 remainder waives the 100% floor.",
       "type": "object",
       "required": [
         "liquidate"
@@ -372,6 +372,13 @@
                 }
               ]
             },
+            "liquidator": {
+              "description": "If provided, changes the account authorized for restricted liquidations.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "margin_rate": {
               "anyOf": [
                 {
@@ -391,7 +398,7 @@
               "minimum": 0.0
             },
             "max_liquidation_staleness_seconds": {
-              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (owner-only) or [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).",
+              "description": "Seconds past oracle expiration after which a stored price is unpriceable for liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (liquidator-only) or [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).",
               "default": null,
               "type": [
                 "integer",
@@ -777,13 +784,13 @@
       ]
     },
     "LiquidationAccess": {
-      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",
+      "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains liquidator-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",
       "oneOf": [
         {
-          "description": "Only the cw-ownable owner may liquidate (current production posture).",
+          "description": "Only the configured liquidator may liquidate.",
           "type": "string",
           "enum": [
-            "owner_only"
+            "liquidator_only"
           ]
         },
         {

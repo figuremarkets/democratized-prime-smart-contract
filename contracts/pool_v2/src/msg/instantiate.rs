@@ -64,12 +64,14 @@ pub struct InstantiateMsg {
     pub bad_debt_loss_allocation: BadDebtLossAllocation,
     /// The account serving as the custodian of contract operations.
     pub custodian: String,
+    /// The account authorized to liquidate when liquidation access is restricted.
+    pub liquidator: String,
     /// Seconds past oracle expiration after which a stored price is unpriceable for
-    /// liquidation. Omitted JSON uses 1 hour (capped at 24 hours under owner-only;
+    /// liquidation. Omitted JSON uses 1 hour (capped at 24 hours under liquidator-only;
     /// permissionless cannot exceed 1 hour). `0` disables last-known prices.
     #[serde(default = "crate::model::contract_state::default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
-    /// Who may call Liquidate. Omitted JSON is owner-only. Permissionless requires last-known
+    /// Who may call Liquidate. Omitted JSON is liquidator-only. Permissionless requires last-known
     /// ≤ [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] and
     /// [`crate::model::BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`]. Unpriceable
     /// collateral that is load-bearing still requires the owner.

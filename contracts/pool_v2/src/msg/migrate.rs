@@ -8,4 +8,10 @@ pub struct MigrateMsg {
     /// custodian accouint set, this value __MUST__ be provided, otherwise
     /// and error will be raised and the migration will fail.
     pub custodian: Option<String>,
+    /// If provided, the account to set as the contract liquidator.
+    ///
+    /// When omitted, existing liquidator is kept. If stored state has no liquidator
+    /// (legacy instances), migrate backfills the current owner.
+    #[serde(default)]
+    pub liquidator: Option<String>,
 }
