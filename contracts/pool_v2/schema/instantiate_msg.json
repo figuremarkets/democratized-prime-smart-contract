@@ -280,6 +280,7 @@
           "$ref": "#/definitions/Decimal256"
         },
         "spy": {
+          "description": "Seconds used to turn an APR into index growth. Must be between 31536000 and 31622400 (365–366 days) so `max_rate` ≤ 1 is at most 100% APR.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
