@@ -40,7 +40,7 @@ Set at **instantiation** and used whenever we compute borrower/lender rates from
 | `last_updated_at` | Last time these indexes were updated (for accrual). |
 | `total_scaled_liquidity` | Sum of all lenders’ scaled balances (never decreases except on withdraw). |
 | `total_scaled_borrow` | Sum of all borrowers’ scaled debt (decreases on repay, liquidation, and **bad-debt** write-off). |
-| `accrued_reserve` | Protocol share of interest, in lending base units. Updated directly from pre-accrual borrows: `floor(total_borrow × protocol_fee_rate × elapsed / seconds_per_year)`. Sub-unit fees are deliberately left with lenders. |
+| `accrued_reserve` | Protocol share of interest, in lending base units. Updated directly from pre-accrual borrows: `floor(total_borrow × protocol_fee_rate × elapsed / SECONDS_PER_YEAR (31_536_000))`. Sub-unit fees are deliberately left with lenders. |
 | `deficit_underlying` | **Shortfall** in lending base units after a **bad-debt** liquidation: the borrower has no collateral left, but a slice of debt could not be repaid from what was seized. It is **not** scaled borrow. It does **not** earn borrower interest. Older deployments deserialize it as **0** (`#[serde(default)]`). |
 
 **Two “cash” ideas (underlying units):**
@@ -203,7 +203,7 @@ No “raw” underlying balances are stored for lend/borrow; only scaled amounts
 `lender_rate = borrower_rate × utilization × (1 − reserve_factor)`
 
 **Index growth (per time step):**
-`new_index = old_index × (1 + rate × elapsed_seconds / seconds_per_year)`
+`new_index = old_index × (1 + rate × elapsed_seconds / SECONDS_PER_YEAR (31_536_000))`
 
 **Functions:**
 
@@ -213,7 +213,7 @@ No “raw” underlying balances are stored for lend/borrow; only scaled amounts
 - **`protocol_fee_rate(params, borrower_rate)`** – Returns the protocol APR applied to outstanding borrows: `borrower_rate × reserve_factor` in reserve-factor mode, or `flat_fee_apr` in flat-spread mode.
 
 - **`index_growth_factor(rate, elapsed_seconds, seconds_per_year)`** – Returns the multiplicative factor for one index step: `1 + rate × (elapsed_seconds / seconds_per_year)`. New index = old index × this factor. Returns 1 if elapsed is 0. Used by `compute_effective_reserve` to grow liquidity and borrow indexes.
-- **`compute_effective_reserve(store, as_of_time, params)`** – **Read-only**: loads the stored reserve, accrues liquidity and borrow indexes from `last_updated_at` to `as_of_time` using **current** utilization and the kink model, and books `floor(pre_accrual_total_borrow × protocol_fee_rate × elapsed / seconds_per_year)` into **`accrued_reserve`**. Computing one non-negative fee term avoids the old ratchet from differencing independently floored borrower and lender totals. Returns the updated reserve **without** saving. Used by all queries so callers see current indexes, balances, and rates; also used by `update_reserve_indexes`. At 0% utilization, borrower rate = min_rate and lender rate = 0, so the borrow index grows and the liquidity index does not.
+- **`compute_effective_reserve(store, as_of_time, params)`** – **Read-only**: loads the stored reserve, accrues liquidity and borrow indexes from `last_updated_at` to `as_of_time` using **current** utilization and the kink model, and books `floor(pre_accrual_total_borrow × protocol_fee_rate × elapsed / SECONDS_PER_YEAR (31_536_000))` into **`accrued_reserve`**. Computing one non-negative fee term avoids the old ratchet from differencing independently floored borrower and lender totals. Returns the updated reserve **without** saving. Used by all queries so callers see current indexes, balances, and rates; also used by `update_reserve_indexes`. At 0% utilization, borrower rate = min_rate and lender rate = 0, so the borrow index grows and the liquidity index does not.
 - **`update_reserve_indexes(store, env, params)`** – Calls `compute_effective_reserve(store, env.block.time, params)` then **saves** the result (including updated indexes and accrued_reserve). Used at the start of Lend, Withdraw, WithdrawExact, Borrow, Repay, RemoveCollateral, and Liquidate so state is accrued before mutating.
 - **Scaling helpers** (Decimal256 with 18-decimal atomics ↔ u128):
   - **`underlying_to_scaled_liquidity(underlying, liquidity_index)`** – Floor. Use when *recording* new lend supply and when *reducing* liquidity (e.g. withdraw, transfer): floor on mint keeps booked lender claims from exceeding received coins; floor on withdraw converts requested underlying to scaled units to deduct so we never deduct more scaled than the request entitles. For **Withdraw**, the pool must send **scaled_to_underlying(scaled)** (the value of what we burn), not the requested amount—otherwise floor(amount/index)×index &lt; amount would over-credit the user and leak from the pool.

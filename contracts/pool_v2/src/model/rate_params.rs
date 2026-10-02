@@ -112,6 +112,8 @@ fn default_seconds_per_year() -> u64 {
 }
 
 /// Responses advertise the accrual constant, not a stale stored year.
+/// Tests that check spy rejection must send raw JSON or pass the struct straight to `execute()`,
+/// because serializing a `RateParamsV1` always writes 31536000 and would hide the bad value.
 fn serialize_seconds_per_year<S>(_: &u64, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
