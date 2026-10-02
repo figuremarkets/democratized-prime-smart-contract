@@ -70,7 +70,7 @@ const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 const COLLATERAL_DENOM: &str = "nbtc.figure.se";
 /// Second supported collateral used to test liquidation when one feed is stale or missing.
 const UNRELIABLE_COLLATERAL: &str = "neth.figure.se";
-/// 18-decimal collateral for the sc-544110 value_usd band regression.
+/// 18-decimal collateral for the value_usd band regression.
 const WEI_COLLATERAL: &str = "wei.eth.figure.se";
 const ONE_WHOLE_18: u128 = 1_000_000_000_000_000_000;
 
@@ -3879,8 +3879,8 @@ fn liquidate_rejects_short_repay_when_priced_market_equals_payoff() {
 }
 
 /// Priced collateral covers the debt, and the borrower also holds unpriceable B.
-/// A short repay that seizes the priced side is the sc-556130 write-off, so it is rejected
-/// and B stays. A full payoff is not a write-off (sc-555939), so B stays in the map.
+/// A short repay that seizes the priced side is a covered write-off, so it is rejected
+/// and B stays. A full payoff is not a write-off, so B stays in the map.
 #[test]
 fn liquidate_covered_priced_side_keeps_unpriceable_remainder() {
     let mut deps = mock_provenance_dependencies();

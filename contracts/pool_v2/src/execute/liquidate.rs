@@ -328,7 +328,7 @@ pub fn liquidate(
             pre_priced_market_value_usd.checked_add(price.value_usd(*amt)?)?;
     }
     let debt_payoff_value_usd = price_lending.value_usd(debt_payoff)?;
-    // Accepted risk (sc-556130). While D <= C < D * liquidation_bonus_rate,
+    // Accepted risk. While D <= C < D * liquidation_bonus_rate,
     // liquidator profit is capped at C - D (the borrower's remaining value)
     // and falls to 0 as C approaches D. Below D, a write-off pays the bonus
     // again, so a keeper with no competition may wait for insolvency. Paying
