@@ -49,12 +49,17 @@
 //! bound is used as last-known (not fatal) so liquidations are not frozen by a paused feed. The
 //! lending denom must have a stored price within the same bound.
 //!
+//! **Directed sale:** a live offer whose normalized amounts equal `collateral_to_seize` skips
+//! only the pre-state liquidatable gate and the load-bearing half of the owner gate. The
+//! write-off sweep, bonus cap, and post-state health check still apply. An empty seize never
+//! matches an offer. The offer is cleared only after that fill succeeds.
+//!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
-//! liquidatable → lending price → sent funds and scaled repay → per-asset checks and dry-run
-//! post-seizure → `bad_debt` → owner gate (load-bearing unpriceable, or a write-off that would
+//! directed-fill match → liquidatable (unless directed) → lending price → sent funds and scaled repay → per-asset checks and dry-run
+//! post-seizure → `bad_debt` → owner gate (load-bearing unpriceable unless directed, or a write-off that would
 //! sweep unpriceable collateral) → value band (100% floor waived on `bad_debt`, or a full
 //! repay that seizes nothing) → post-state
-//! health → persist reserve, sweep the remainder on `bad_debt`, collateral → response
+//! health → persist reserve, sweep the remainder on `bad_debt`, collateral, clear offer on directed fill → response
 //! (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
@@ -63,16 +68,18 @@
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION,
     ATTRIBUTE_BAD_DEBT_UNDERLYING, ATTRIBUTE_BORROWER, ATTRIBUTE_COLLATERAL_JSON,
-    ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_LIQUIDATION_ACCESS, ATTRIBUTE_LIQUIDATOR,
-    ATTRIBUTE_SCALED_AMOUNT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
+    ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_LIQUIDATION_ACCESS,
+    ATTRIBUTE_LIQUIDATOR, ATTRIBUTE_SCALED_AMOUNT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
 };
+use crate::model::directed_sale::{is_live, maps_equal_normalized};
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
 use crate::model::BorrowerCollateralV1;
 use crate::model::{BadDebtLossAllocation, ContractStateV1, LiquidationAccess};
 use crate::storage::{
-    get_borrower_collateral, get_contract_state_v1, get_scaled_borrow, set_borrower_collateral,
-    set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
+    clear_directed_sale_offer, get_borrower_collateral, get_contract_state_v1,
+    get_directed_sale_offer, get_scaled_borrow, set_borrower_collateral, set_reserve_state_v1,
+    set_scaled_borrow, subtract_total_collateral,
 };
 use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, calculate_total_collateral_value_usd,
@@ -160,10 +167,16 @@ pub fn liquidate(
         &borrower_collateral,
         Uint128::from(debt_underlying),
     )?;
-    ensure!(
-        health == BorrowerHealthV1::Liquidatable,
-        illegal_argument("Borrower is not liquidatable (LTV below liquidation rate)")
-    );
+    let stored_offer = get_directed_sale_offer(deps.storage, borrower_key)?;
+    let directed_fill = stored_offer.as_ref().is_some_and(|offer| {
+        is_live(offer, env.block.time) && maps_equal_normalized(&offer.amounts, collateral_to_seize)
+    });
+    if !directed_fill {
+        ensure!(
+            health == BorrowerHealthV1::Liquidatable,
+            illegal_argument("Borrower is not liquidatable (LTV below liquidation rate)")
+        );
+    }
 
     // ---------- 4. Lending denom price (repay valuation for the seizure band) ----------
     let price_lending = asset_prices
@@ -305,6 +318,7 @@ pub fn liquidate(
         debt_underlying,
         bad_debt,
         &post_collateral,
+        directed_fill,
     )?;
 
     // ---------- 7. USD band vs repay ----------
@@ -433,6 +447,9 @@ pub fn liquidate(
         post_collateral
     };
     set_borrower_collateral(deps.storage, borrower_key, &stored_collateral)?;
+    if directed_fill {
+        clear_directed_sale_offer(deps.storage, borrower_key)?;
+    }
 
     let send_coins: Vec<Coin> = outgoing
         .into_iter()
@@ -462,6 +479,10 @@ pub fn liquidate(
         .add_attribute(
             ATTRIBUTE_LIQUIDATION_ACCESS,
             contract.liquidation_access.as_str(),
+        )
+        .add_attribute(
+            ATTRIBUTE_DIRECTED_SALE,
+            if directed_fill { "true" } else { "false" },
         );
     if !send_coins.is_empty() {
         res = res.add_message(BankMsg::Send {
@@ -547,6 +568,7 @@ fn require_owner_for_unpriceable(
     debt_underlying: u128,
     bad_debt: bool,
     post_collateral: &BorrowerCollateralV1,
+    directed_fill: bool,
 ) -> Result<(), ContractError> {
     if !matches!(
         contract.liquidation_access,
@@ -559,9 +581,15 @@ fn require_owner_for_unpriceable(
             .amounts
             .iter()
             .any(|(id, amt)| *amt > 0 && quoted.unpriceable.contains(id));
-    if unpriceable_is_load_bearing(contract, quoted, pre_collateral, debt_underlying)?
-        || writeoff_sweeps_unpriceable
-    {
+    // A directed fill is an invitation to seize a named pile, so load-bearing dead
+    // collateral outside that pile does not force the owner. A write-off that would
+    // sweep unpriceable units the borrower did not list still does.
+    let load_bearing = if directed_fill {
+        false
+    } else {
+        unpriceable_is_load_bearing(contract, quoted, pre_collateral, debt_underlying)?
+    };
+    if load_bearing || writeoff_sweeps_unpriceable {
         assert_owner(storage, sender, ASSERT_OWNER_UNPRICEABLE_ERR)?;
     }
     Ok(())

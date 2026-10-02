@@ -4,7 +4,9 @@ use crate::model::{
     health::BorrowerHealthResponseV1, AssetRequirementV1, BorrowerCollateralV1,
     BorrowerPositionResponseV1, ContractStateV1, QueryError,
 };
-use crate::storage::{get_borrower_collateral, get_contract_state_v1, get_scaled_borrow};
+use crate::storage::{
+    get_borrower_collateral, get_contract_state_v1, get_directed_sale_offer, get_scaled_borrow,
+};
 use crate::utils::{
     calculate_total_collateral_value_usd, compute_effective_reserve, drop_unpriceable_collateral,
     drop_unpriceable_for_liquidation, get_borrower_health, get_price_from_oracle,
@@ -26,6 +28,8 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
 
     let borrower_collateral =
         get_borrower_collateral(deps.storage, address).map_err(QueryError::Contract)?;
+    let directed_sale_offer =
+        get_directed_sale_offer(deps.storage, address).map_err(QueryError::Contract)?;
 
     let mut collateral: Vec<AssetRequirementV1> = Vec::new();
     let mut unpriceable_collateral = Vec::new();
@@ -144,6 +148,7 @@ pub fn query_borrower_position(deps: Deps, env: Env, address: &str) -> Result<Bi
         liquidation_ltv,
         liquidation_health,
         liquidation_unpriceable_collateral,
+        directed_sale_offer,
     })
     .map_err(QueryError::Std)
 }

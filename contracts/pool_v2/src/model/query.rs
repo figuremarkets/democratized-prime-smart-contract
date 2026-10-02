@@ -3,6 +3,7 @@
 //! We do not JSON-serialize storage models (e.g. ReserveStateV1) directly. Response types
 //! include derived fields (total_liquidity, total_borrow) so clients get a complete view.
 
+use crate::model::directed_sale::DirectedSaleOfferV1;
 use crate::model::health::BorrowerHealthResponseV1;
 use crate::model::{error::ContractError, Denom, ReserveStateV1};
 use cosmwasm_std::{Timestamp, Uint128};
@@ -162,6 +163,9 @@ pub struct BorrowerPositionResponseV1 {
     /// swept on a write-off. Empty when every held asset is within the last-known bound.
     #[serde(default)]
     pub liquidation_unpriceable_collateral: Vec<String>,
+    /// The borrower's directed-sale offer, including an expired one. `None` when unset, cancelled, or filled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directed_sale_offer: Option<DirectedSaleOfferV1>,
 }
 
 /// Response for the GetCollateralRequirements query.
