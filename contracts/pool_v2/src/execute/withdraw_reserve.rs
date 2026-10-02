@@ -17,7 +17,9 @@ pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may withdraw accrued
 
 /// Withdraw backed accrued protocol reserve to the given recipient, or to the contract owner if recipient is None.
 /// Owner only; no funds accepted. Updates reserve indexes first so accrued_reserve is current.
-/// Uncollected reserve stays booked. Only reserve above `bank + B − L` is written off.
+/// Uncollected reserve stays booked. Every successful response includes
+/// `accrued_reserve_remaining` and `unbacked_reserve_writeoff`, including when the value is 0.
+/// Only reserve above `bank + B − L` is written off.
 pub fn withdraw_reserve(
     deps: DepsMut,
     env: Env,
@@ -91,20 +93,17 @@ pub fn withdraw_reserve(
         }],
     };
 
-    let mut response = Response::new()
+    // Both keys are always present, including 0. A missing key means this contract
+    // revision is not deployed.
+    let response = Response::new()
         .add_message(send_msg)
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
         .add_attribute(ATTRIBUTE_AMOUNT, pay.to_string())
-        .add_attribute(ATTRIBUTE_RECIPIENT, to_address.as_str());
-    if writeoff > 0 {
-        response =
-            response.add_attribute(ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF, writeoff.to_string());
-    }
-    if reserve.accrued_reserve > 0 {
-        response = response.add_attribute(
+        .add_attribute(ATTRIBUTE_RECIPIENT, to_address.as_str())
+        .add_attribute(ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF, writeoff.to_string())
+        .add_attribute(
             ATTRIBUTE_ACCRUED_RESERVE_REMAINING,
             reserve.accrued_reserve.to_string(),
         );
-    }
     response.attach_rates(&reserve, &contract.rate_params)
 }

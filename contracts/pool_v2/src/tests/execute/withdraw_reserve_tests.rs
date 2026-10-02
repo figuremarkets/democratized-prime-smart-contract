@@ -453,6 +453,14 @@ fn withdraw_reserve_caps_payout_at_bank_surplus_over_lender_claims() {
         .find(|a| a.key == ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF)
         .expect("capped withdraw must surface the unbacked writeoff");
     assert_eq!(writeoff.value, (50_000_000u128 - bank_surplus).to_string());
+    assert_eq!(
+        response
+            .attributes
+            .iter()
+            .find(|a| a.key == ATTRIBUTE_ACCRUED_RESERVE_REMAINING)
+            .map(|a| a.value.as_str()),
+        Some("0")
+    );
 }
 
 /// Worked example: scaled liquidity 1000 at index 1.08 (L = 1080), scaled borrow 1000 at index 1.09 (B = 1090).
@@ -547,8 +555,9 @@ fn withdraw_reserve_keeps_backed_fees_booked_when_borrow_exceeds_liquidity() {
 
     let first_pay = sent_lending_amount(&response);
     assert_eq!(first_pay, 10);
-    assert!(
-        writeoff_attribute(&response).is_none(),
+    assert_eq!(
+        writeoff_attribute(&response),
+        Some("0"),
         "fully backed remainder must not be written off"
     );
     assert_eq!(
@@ -587,7 +596,11 @@ fn withdraw_reserve_keeps_backed_fees_booked_when_borrow_exceeds_liquidity() {
 
     let second_pay = sent_lending_amount(&follow_up);
     assert_eq!(second_pay, 10);
-    assert!(writeoff_attribute(&follow_up).is_none());
+    assert_eq!(writeoff_attribute(&follow_up), Some("0"));
+    assert_eq!(
+        response_attribute(&follow_up, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
+        Some("0")
+    );
     let after = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     assert_eq!(after.accrued_reserve, 0);
     let lender_claims =
@@ -629,6 +642,10 @@ fn withdraw_reserve_writes_off_only_unbacked_when_liquidity_covers_claims() {
     assert_eq!(sent_lending_amount(&response), 5);
     assert_eq!(writeoff_attribute(&response), Some("45"));
     assert_eq!(
+        response_attribute(&response, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
+        Some("0")
+    );
+    assert_eq!(
         get_reserve_state_v1(deps.as_ref().storage)
             .unwrap()
             .accrued_reserve,
@@ -664,6 +681,10 @@ fn withdraw_reserve_writes_off_only_the_unbacked_slice_when_borrow_exceeds_liqui
     assert_eq!(sent_lending_amount(&response), 10);
     assert_eq!(writeoff_attribute(&response), Some("5"));
     assert_eq!(
+        response_attribute(&response, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
+        Some("10")
+    );
+    assert_eq!(
         get_reserve_state_v1(deps.as_ref().storage)
             .unwrap()
             .accrued_reserve,
@@ -698,7 +719,7 @@ fn eliminate_deficit_spends_booked_but_uncollected_reserve() {
     )
     .expect("backed surplus should be withdrawable");
     assert_eq!(sent_lending_amount(&withdraw), 10);
-    assert!(writeoff_attribute(&withdraw).is_none());
+    assert_eq!(writeoff_attribute(&withdraw), Some("0"));
     assert_eq!(
         response_attribute(&withdraw, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
         Some("10")
@@ -998,7 +1019,10 @@ fn withdraw_reserve_e2e_accrual_partial_payout_repay_and_lender_exit() {
 
     let reserve_after_first = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     assert!(reserve_after_first.accrued_reserve > 0);
-    assert!(response_attribute(&first, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF).is_none());
+    assert_eq!(
+        response_attribute(&first, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF),
+        Some("0")
+    );
     assert_eq!(
         response_attribute(&first, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
         Some(reserve_after_first.accrued_reserve.to_string().as_str())
@@ -1031,7 +1055,14 @@ fn withdraw_reserve_e2e_accrual_partial_payout_repay_and_lender_exit() {
     owner_paid += second_pay;
     contract_bank -= second_pay;
     sync_contract_bank(&mut deps, &env, contract_bank);
-    assert!(response_attribute(&second, ATTRIBUTE_ACCRUED_RESERVE_REMAINING).is_none());
+    assert_eq!(
+        response_attribute(&second, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
+        Some("0")
+    );
+    assert_eq!(
+        response_attribute(&second, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF),
+        Some("0")
+    );
     assert_eq!(
         get_reserve_state_v1(deps.as_ref().storage)
             .unwrap()
