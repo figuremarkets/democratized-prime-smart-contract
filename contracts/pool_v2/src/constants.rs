@@ -43,7 +43,11 @@ pub const ATTRIBUTE_REPO_TOKEN_ADDRESS: &str = "repo_token_cw20_address";
 pub const ATTRIBUTE_BAD_DEBT_UNDERLYING: &str = "bad_debt_underlying";
 /// Remaining reserve `deficit_underlying`.
 pub const ATTRIBUTE_DEFICIT_UNDERLYING: &str = "deficit_underlying";
-/// Unbacked `accrued_reserve` closed by WithdrawReserve's solvency cap (lending base units).
+/// Unbacked `accrued_reserve` closed by WithdrawReserve (lending base units).
+/// Always present on that response, including 0.
 pub const ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF: &str = "unbacked_reserve_writeoff";
+/// Backed `accrued_reserve` left booked after WithdrawReserve (lending base units).
+/// Always present on that response, including 0.
+pub const ATTRIBUTE_ACCRUED_RESERVE_REMAINING: &str = "accrued_reserve_remaining";
 /// Pool config `bad_debt_loss_allocation` when a liquidation hits the bad-debt path.
 pub const ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION: &str = "bad_debt_loss_allocation";

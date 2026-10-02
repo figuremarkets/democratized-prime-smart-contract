@@ -87,10 +87,12 @@ pub enum ExecuteMsg {
         to_remove: Vec<String>,
     },
 
-    /// Withdraw accrued protocol reserve (contract owner only; no funds). Sends at most the bank
-    /// surplus above lender claims to the recipient, or to the contract owner if recipient is None.
-    /// Then zeros the booked bucket. If the cap binds, the unbacked remainder is emitted as
-    /// `unbacked_reserve_writeoff`. Blocked while `deficit_underlying` is positive.
+    /// Withdraw accrued protocol reserve (contract owner only; no funds). Pays `min(backed, bank)`
+    /// to the recipient, or to the contract owner if recipient is None, where backed reserve is
+    /// `min(accrued_reserve, bank + B − L)`. Uncollected reserve stays booked. Every response
+    /// includes `accrued_reserve_remaining` and `unbacked_reserve_writeoff`, including when the
+    /// value is 0. Only reserve above `bank + B − L` is written off. Blocked while
+    /// `deficit_underlying` is positive.
     WithdrawReserve {
         /// Address to receive the reserve; if None, sends to the contract owner.
         recipient: Option<String>,
