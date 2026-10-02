@@ -28,7 +28,7 @@ Everything committed here is public: code, comments, docs, commit messages, bran
 - Comments and docs describe what the code does and why, in code terms. No product plans, future features, partner, treasury or operational details, and no "production" posture.
 - Never describe a known defect, an exploit, or the inputs or conditions that reach one. Fix it, or report it privately per `.github/SECURITY.md`.
 - No Shortcut links or story IDs in code, comments, docs, or PR description text. They're allowed only in commit subjects, branch names, PR titles, and the trailing `Shortcut:` line of the PR description.
-- Never commit `.ai-discussions/`, audit reproduction tests, or unpublished findings. Published audits (`contracts/repo_token_cw20/CW20_AUDIT.md`) stay.
+- Never commit discussion notes or unpublished findings. Published audits (`contracts/repo_token_cw20/CW20_AUDIT.md`) stay.
 
 ## Agent tooling
 
@@ -41,4 +41,4 @@ Everything committed here is public: code, comments, docs, commit messages, bran
 | Date | Mistake | Correct behavior | Where it is written |
 |------|---------|------------------|---------------------|
 | 2026-10-02 | Comments cited Shortcut story IDs | Describe the behavior in code terms | `## Public repository` |
-| 2026-10-02 | Comments described a defect's reachability and production posture | State what the code or test asserts | `## Public repository` |
+| 2026-10-02 | Comments described deployment context instead of behavior | State what the code or test asserts | `## Public repository` |

@@ -2,5 +2,3 @@
 .idea/
 target/
 artifacts/
-.ai-discussions/
-audit_repro_tests.rs
