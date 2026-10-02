@@ -336,8 +336,7 @@ pub fn liquidate(
     // closes. A position reaches the band only if nobody liquidated earlier,
     // while the full bonus was still available. At default rates that window
     // runs from about 1.39*D down to 1.02*D. Mitigation is operational: run
-    // the owner liquidator at liquidation_rate. A keeper subsidy is a separate
-    // product decision.
+    // the owner liquidator at liquidation_rate.
     ensure!(
         !(bad_debt && pre_priced_market_value_usd >= debt_payoff_value_usd),
         illegal_argument(format!(
