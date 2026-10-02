@@ -3,7 +3,9 @@
 use crate::contract::query;
 use crate::model::{ReserveStateV1, StateResponseV1};
 use crate::msg::QueryMsg;
-use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
+use crate::storage::{
+    contract_state_key, get_contract_state_v1, get_reserve_state_v1, set_reserve_state_v1,
+};
 use crate::tests::query::common::{setup_instantiated, CUSTODIAN, REPO_TOKEN_CW20};
 use cosmwasm_std::Decimal256;
 use cosmwasm_std::{from_json, Uint128};
@@ -13,6 +15,7 @@ use std::str::FromStr;
 fn get_state_returns_contract_and_effective_reserve() {
     let (deps, env) = setup_instantiated();
     let bin = query(deps.as_ref(), env, QueryMsg::GetState {}).expect("query should succeed");
+    let raw = String::from_utf8(bin.as_ref().to_vec()).expect("GetState json");
     let state: StateResponseV1 = from_json(bin).expect("decode GetState response");
     assert_eq!(
         state
@@ -39,6 +42,46 @@ fn get_state_returns_contract_and_effective_reserve() {
     assert_eq!(reserve.total_scaled_borrow, 0);
     assert_eq!(reserve.liquidity_index, Decimal256::one());
     assert_eq!(reserve.borrow_index, Decimal256::one());
+    assert_eq!(state.contract.rate_params.seconds_per_year, 31_536_000);
+    assert!(
+        raw.contains("\"spy\":31536000"),
+        "GetState should keep spy, got {}",
+        raw
+    );
+}
+
+/// A pool that stored a leap-year `spy` still reports the constant accrual uses.
+#[test]
+fn get_state_reports_constant_spy_when_storage_has_leap_year() {
+    let (mut deps, env) = setup_instantiated();
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    let mut raw_state = serde_json::to_value(&state).unwrap();
+    raw_state["rp"]["spy"] = serde_json::json!(31_622_400);
+    deps.as_mut().storage.set(
+        contract_state_key().as_bytes(),
+        &serde_json::to_vec(&raw_state).unwrap(),
+    );
+
+    let stored = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(
+        stored.rate_params.seconds_per_year, 31_622_400,
+        "storage keeps the leap-year value this test is checking"
+    );
+
+    let bin = query(deps.as_ref(), env, QueryMsg::GetState {}).expect("query should succeed");
+    let raw = String::from_utf8(bin.as_ref().to_vec()).expect("GetState json");
+    assert!(
+        raw.contains("\"spy\":31536000"),
+        "GetState should report the accrual constant, got {}",
+        raw
+    );
+    assert!(
+        !raw.contains("31622400"),
+        "GetState should not advertise the stored leap year, got {}",
+        raw
+    );
+    let response: StateResponseV1 = from_json(bin).expect("decode GetState response");
+    assert_eq!(response.contract.rate_params.seconds_per_year, 31_536_000);
 }
 
 #[test]

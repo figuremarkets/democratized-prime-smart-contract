@@ -247,7 +247,6 @@
         "maxr",
         "minr",
         "rf",
-        "spy",
         "tr"
       ],
       "properties": {
@@ -280,7 +279,8 @@
           "$ref": "#/definitions/Decimal256"
         },
         "spy": {
-          "description": "Seconds used to turn an APR into index growth. Must be between 31536000 and 31622400 (365–366 days) so `max_rate` ≤ 1 is at most 100% APR.",
+          "description": "Fixed at 31536000. Optional on input; must equal 31536000 if provided. Retained so responses keep `spy`. Responses report 31536000 even when storage holds a different year.",
+          "default": 31536000,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0

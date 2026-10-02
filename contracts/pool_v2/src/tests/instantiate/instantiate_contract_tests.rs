@@ -7,7 +7,6 @@ use crate::constants::{
 };
 use crate::instantiate::{instantiate_contract, reply};
 use crate::model::error::ContractError;
-use crate::model::rate_params::{MAX_SECONDS_PER_YEAR, MIN_SECONDS_PER_YEAR};
 use crate::model::{
     BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
     MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS, MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
@@ -863,18 +862,11 @@ fn instantiate_fails_rate_params_reserve_factor_one() {
     }
 }
 
-const SECONDS_PER_YEAR_RANGE_ERR: &str =
-    "rate_params: seconds_per_year must be between 31536000 and 31622400 (365–366 days)";
+const SECONDS_PER_YEAR_FIXED_ERR: &str = "rate_params: seconds_per_year must be 31536000";
 
 #[test]
 fn instantiate_fails_rate_params_seconds_per_year_outside_year() {
-    for spy in [
-        0u64,
-        1,
-        86_400,
-        MIN_SECONDS_PER_YEAR - 1,
-        MAX_SECONDS_PER_YEAR + 1,
-    ] {
+    for spy in [0u64, 1, 86_400, 31_535_999, 31_536_001, 31_622_400] {
         let mut deps = mock_provenance_dependencies();
         deps.api = deps.api.with_prefix("tp");
         let mut msg = default_instantiate_msg();
@@ -891,8 +883,8 @@ fn instantiate_fails_rate_params_seconds_per_year_outside_year() {
         match &err {
             ContractError::IllegalArgumentError { message } => {
                 assert_eq!(
-                    message, SECONDS_PER_YEAR_RANGE_ERR,
-                    "spy {spy} should be rejected with the year bound"
+                    message, SECONDS_PER_YEAR_FIXED_ERR,
+                    "spy {spy} should be rejected with the fixed year"
                 );
             }
             _ => panic!(
@@ -904,24 +896,44 @@ fn instantiate_fails_rate_params_seconds_per_year_outside_year() {
 }
 
 #[test]
-fn instantiate_succeeds_rate_params_seconds_per_year_at_year_bounds() {
-    for spy in [MIN_SECONDS_PER_YEAR, MAX_SECONDS_PER_YEAR] {
-        let mut deps = mock_provenance_dependencies();
-        deps.api = deps.api.with_prefix("tp");
-        let mut msg = default_instantiate_msg();
-        msg.rate_params.seconds_per_year = spy;
+fn instantiate_succeeds_rate_params_seconds_per_year_fixed_or_omitted() {
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    let mut msg = default_instantiate_msg();
+    msg.rate_params.seconds_per_year = 31_536_000;
 
-        instantiate_contract(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&Addr::unchecked(OWNER), &[]),
-            msg,
-        )
-        .unwrap_or_else(|err| panic!("instantiate should succeed for spy {}, got {:?}", spy, err));
+    instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        msg,
+    )
+    .expect("instantiate should succeed for spy 31536000");
 
-        let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
-        assert_eq!(state.rate_params.seconds_per_year, spy);
-    }
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(state.rate_params.seconds_per_year, 31_536_000);
+
+    let mut omitted = serde_json::to_value(default_instantiate_msg()).unwrap();
+    omitted["rate_params"]
+        .as_object_mut()
+        .expect("rate_params object")
+        .remove("spy");
+    let omitted_msg: InstantiateMsg =
+        serde_json::from_value(omitted).expect("spy omitted should default");
+    assert_eq!(omitted_msg.rate_params.seconds_per_year, 31_536_000);
+
+    let mut deps = mock_provenance_dependencies();
+    deps.api = deps.api.with_prefix("tp");
+    instantiate_contract(
+        deps.as_mut(),
+        mock_env(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        omitted_msg,
+    )
+    .expect("instantiate should succeed when spy is omitted");
+
+    let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(state.rate_params.seconds_per_year, 31_536_000);
 }
 
 #[test]

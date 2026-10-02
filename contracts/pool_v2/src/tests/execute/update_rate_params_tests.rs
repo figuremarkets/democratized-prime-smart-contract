@@ -5,7 +5,6 @@ use crate::contract::execute;
 use crate::execute::update_rate_params::{ACTION, ASSERT_CUSTODIAN_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
-use crate::model::rate_params::MAX_SECONDS_PER_YEAR;
 use crate::model::{CollateralAssetV1, Denom, FeeModelV1, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
@@ -467,8 +466,7 @@ fn update_rate_params_fails_flat_spread_with_non_zero_reserve_factor() {
     }
 }
 
-const SECONDS_PER_YEAR_RANGE_ERR: &str =
-    "rate_params: seconds_per_year must be between 31536000 and 31622400 (365–366 days)";
+const SECONDS_PER_YEAR_FIXED_ERR: &str = "rate_params: seconds_per_year must be 31536000";
 
 const LENDING_DENOM: &str = "uylds.fcc";
 const COLLATERAL_DENOM: &str = "asset.one";
@@ -506,11 +504,10 @@ fn set_oracle_prices(
     querier.mock_querier.update_wasm(handler);
 }
 
-/// A custodian update with `seconds_per_year = 1` is rejected before indexes accrue.
+/// A custodian update with a non-constant `seconds_per_year` is rejected before indexes accrue.
 /// A day of interest on a live borrow would move both indexes and `last_updated_at` if
 /// `validate()` ran after `update_reserve_indexes`.
-#[test]
-fn update_rate_params_rejects_one_second_year_without_changing_reserve() {
+fn assert_custodian_spy_rejected_without_accrual(spy: u64) {
     let (mut deps, mut env) = setup_instantiated();
 
     execute(
@@ -573,7 +570,7 @@ fn update_rate_params_rejects_one_second_year_without_changing_reserve() {
         reserve_factor: Decimal256::zero(),
         fee_model: Default::default(),
         flat_fee_apr: Decimal256::zero(),
-        seconds_per_year: 1,
+        seconds_per_year: spy,
     };
 
     let err = execute(
@@ -588,7 +585,7 @@ fn update_rate_params_rejects_one_second_year_without_changing_reserve() {
 
     match &err {
         ContractError::IllegalArgumentError { message } => {
-            assert_eq!(message, SECONDS_PER_YEAR_RANGE_ERR);
+            assert_eq!(message, SECONDS_PER_YEAR_FIXED_ERR);
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
@@ -608,22 +605,40 @@ fn update_rate_params_rejects_one_second_year_without_changing_reserve() {
 }
 
 #[test]
-fn update_rate_params_persists_leap_year_seconds() {
+fn update_rate_params_rejects_one_second_year_without_changing_reserve() {
+    assert_custodian_spy_rejected_without_accrual(1);
+}
+
+#[test]
+fn update_rate_params_rejects_leap_year_seconds_without_changing_reserve() {
+    assert_custodian_spy_rejected_without_accrual(31_622_400);
+}
+
+#[test]
+fn update_rate_params_omitted_spy_stores_constant() {
     let (mut deps, env) = setup_instantiated();
-    let mut new_params = default_instantiate_msg().rate_params;
-    new_params.seconds_per_year = MAX_SECONDS_PER_YEAR;
+    let msg: ExecuteMsg = from_json(
+        r#"{"update_rate_params":{"rate_params":{"tr":"0.09","minr":"0.0325","maxr":"0.20","kink":"0.90","rf":"0.005"}}}"#,
+    )
+    .expect("spy omitted should default");
 
     execute(
         deps.as_mut(),
-        env,
+        env.clone(),
         message_info(&Addr::unchecked(CUSTODIAN), &[]),
-        ExecuteMsg::UpdateRateParams {
-            rate_params: new_params.clone(),
-        },
+        msg,
     )
-    .expect("leap-year seconds_per_year should be accepted");
+    .expect("omitted spy should be accepted");
 
     let contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
-    assert_eq!(contract.rate_params, new_params);
-    assert_eq!(contract.rate_params.seconds_per_year, MAX_SECONDS_PER_YEAR);
+    assert_eq!(contract.rate_params.seconds_per_year, 31_536_000);
+
+    let bin = crate::contract::query(deps.as_ref(), env, crate::msg::QueryMsg::GetState {})
+        .expect("GetState");
+    let raw = String::from_utf8(bin.as_ref().to_vec()).expect("GetState json");
+    assert!(
+        raw.contains("\"spy\":31536000"),
+        "GetState should keep spy, got {}",
+        raw
+    );
 }
