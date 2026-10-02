@@ -1,6 +1,7 @@
 pub mod collateral;
 pub mod contract_state;
 pub mod denom;
+pub mod directed_sale;
 pub mod error;
 pub mod health;
 pub mod query;
@@ -16,6 +17,7 @@ pub use contract_state::{
     MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
 };
 pub use denom::Denom;
+pub use directed_sale::{is_live, maps_equal_normalized, normalize_seize_map, DirectedSaleOfferV1};
 pub use error::{ContractError, QueryError};
 pub use query::{
     AssetRequirementV1, BorrowerPositionResponseV1, CollateralRequirementsResponseV1,

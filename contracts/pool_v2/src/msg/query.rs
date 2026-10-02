@@ -17,9 +17,10 @@ pub enum QueryMsg {
     GetReserve {},
     /// Borrower position: debt, collateral amounts, collateral value (USD), borrow-side LTV/health
     /// (fresh prices), liquidation LTV/health (last-known within the liquidation bound), held denoms
-    /// omitted from the borrow-side USD total (`unpriceable_collateral`), and held denoms omitted
+    /// omitted from the borrow-side USD total (`unpriceable_collateral`), held denoms omitted
     /// from liquidation LTV (`liquidation_unpriceable_collateral`: not seizable in a partial
-    /// liquidation; swept on a write-off).
+    /// liquidation; swept on a write-off), and `directed_sale_offer` (present when set, including
+    /// after expiry; absent when never set, cancelled, or filled).
     #[returns(BorrowerPositionResponseV1)]
     GetBorrowerPosition { address: String },
     /// Collateral required for a given loan amount (for UI). Per-asset `required` entries

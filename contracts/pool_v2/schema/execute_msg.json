@@ -103,7 +103,34 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Permissionless still requires the owner when unpriceable collateral is load-bearing or a write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off, or a full repay that seizes nothing, waives the 100% floor. A write-off sweeps every remaining collateral unit to the liquidator. A full repay leaves that collateral in place.",
+      "description": "Set, replace, or cancel the sender's directed collateral sale. An empty `collateral` map (or all zeros) cancels and ignores `expires_at`. Only the position owner (`info.sender`) can mutate their row. Fill is `Liquidate` with the exact unexpired map, which skips the pre-state liquidatable gate.",
+      "type": "object",
+      "required": [
+        "set_directed_collateral_sale"
+      ],
+      "properties": {
+        "set_directed_collateral_sale": {
+          "type": "object",
+          "required": [
+            "collateral",
+            "expires_at"
+          ],
+          "properties": {
+            "collateral": {
+              "type": "object",
+              "additionalProperties": false
+            },
+            "expires_at": {
+              "$ref": "#/definitions/Timestamp"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). A live directed-sale offer whose amounts match `collateral_to_seize` exactly skips the pre-state liquidatable check and the load-bearing unpriceable owner check. The write-off sweep of unpriceable collateral still requires the owner. Every other call is unchanged. Permissionless still requires the owner when unpriceable collateral is load-bearing or a write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off, or a full repay that seizes nothing, waives the 100% floor. A write-off sweeps every remaining collateral unit to the liquidator. A full repay leaves that collateral in place.",
       "type": "object",
       "required": [
         "liquidate"

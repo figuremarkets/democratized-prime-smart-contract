@@ -25,6 +25,10 @@ pub const ATTRIBUTE_LENDER_REQUIRED_ATTRS_JSON: &str = "lender_required_attrs_js
 pub const ATTRIBUTE_LIQUIDATOR: &str = "liquidator";
 /// Pool config `liquidation_access` on every Liquidate (auditability of who was allowed).
 pub const ATTRIBUTE_LIQUIDATION_ACCESS: &str = "liquidation_access";
+/// `"true"` when this Liquidate matched a live directed-sale offer; `"false"` on every classic Liquidate.
+pub const ATTRIBUTE_DIRECTED_SALE: &str = "directed_sale";
+/// Deadline of a directed-sale offer, as nanoseconds. `"0"` on cancel.
+pub const ATTRIBUTE_EXPIRES_AT: &str = "expires_at";
 pub const ATTRIBUTE_BORROW_RATE: &str = "borrow_rate";
 pub const ATTRIBUTE_BORROW_INDEX: &str = "borrow_index";
 pub const ATTRIBUTE_LEND_RATE: &str = "lend_rate";

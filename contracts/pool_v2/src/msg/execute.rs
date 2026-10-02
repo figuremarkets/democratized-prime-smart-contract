@@ -2,7 +2,7 @@ use crate::model::{
     BadDebtLossAllocation, CollateralAssetV1, LiquidationAccess, OperationalState, RateParamsV1,
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Decimal256, Uint128};
+use cosmwasm_std::{Decimal256, Timestamp, Uint128};
 use cw20::Cw20ReceiveMsg;
 use cw_ownable::cw_ownable_execute;
 use std::collections::BTreeMap;
@@ -65,7 +65,19 @@ pub enum ExecuteMsg {
         to_remove: BTreeMap<String, Uint128>,
     },
 
+    /// Set, replace, or cancel the sender's directed collateral sale.
+    /// An empty `collateral` map (or all zeros) cancels and ignores `expires_at`.
+    /// Only the position owner (`info.sender`) can mutate their row. Fill is `Liquidate`
+    /// with the exact unexpired map, which skips the pre-state liquidatable gate.
+    SetDirectedCollateralSale {
+        collateral: BTreeMap<String, Uint128>,
+        expires_at: Timestamp,
+    },
+
     /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
+    /// A live directed-sale offer whose amounts match `collateral_to_seize` exactly skips the
+    /// pre-state liquidatable check and the load-bearing unpriceable owner check. The write-off
+    /// sweep of unpriceable collateral still requires the owner. Every other call is unchanged.
     /// Permissionless still requires the owner when unpriceable collateral is load-bearing or a
     /// write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full
     /// scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral

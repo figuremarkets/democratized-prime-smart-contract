@@ -5,7 +5,7 @@ use crate::model::{CollateralAssetV1, OperationalState, RateParamsV1};
 use crate::msg::execute::{Cw20ReceivePayload, EliminateDeficitFunding};
 use crate::msg::ExecuteMsg;
 use crate::tests::query::common::CUSTODIAN;
-use cosmwasm_std::{to_json_binary, Binary, Decimal256, Uint128};
+use cosmwasm_std::{to_json_binary, Binary, Decimal256, Timestamp, Uint128};
 use cw20::Cw20ReceiveMsg;
 use cw_ownable::Action;
 use std::collections::BTreeMap;
@@ -108,6 +108,30 @@ fn remove_collateral_json_deserializes() {
     assert_json_deserializes(
         r#"{"remove_collateral":{"to_remove":{"asset.one":"100"}}}"#,
         ExecuteMsg::RemoveCollateral { to_remove },
+    );
+}
+
+#[test]
+fn set_directed_collateral_sale_json_deserializes() {
+    let mut collateral = BTreeMap::new();
+    collateral.insert("nbtc.figure.se".to_string(), Uint128::new(455));
+    assert_json_deserializes(
+        r#"{"set_directed_collateral_sale":{"collateral":{"nbtc.figure.se":"455"},"expires_at":"1700000000000000000"}}"#,
+        ExecuteMsg::SetDirectedCollateralSale {
+            collateral,
+            expires_at: Timestamp::from_nanos(1_700_000_000_000_000_000),
+        },
+    );
+}
+
+#[test]
+fn cancel_directed_collateral_sale_json_deserializes() {
+    assert_json_deserializes(
+        r#"{"set_directed_collateral_sale":{"collateral":{},"expires_at":"0"}}"#,
+        ExecuteMsg::SetDirectedCollateralSale {
+            collateral: BTreeMap::new(),
+            expires_at: Timestamp::from_nanos(0),
+        },
     );
 }
 
