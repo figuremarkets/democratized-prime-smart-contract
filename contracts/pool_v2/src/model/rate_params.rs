@@ -14,10 +14,8 @@ pub enum FeeModelV1 {
     FlatBorrowSpread,
 }
 
-/// Inclusive lower bound on `seconds_per_year`: 365 days.
-pub const MIN_SECONDS_PER_YEAR: u64 = 31_536_000;
-/// Inclusive upper bound on `seconds_per_year`: 366 days.
-pub const MAX_SECONDS_PER_YEAR: u64 = 31_622_400;
+/// A 365-day year, in seconds, for linear accrual.
+pub const SECONDS_PER_YEAR: u64 = 31_536_000;
 
 /// Kink interest rate model parameters.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -40,9 +38,8 @@ pub struct RateParamsV1 {
     /// Flat protocol fee APR used when `fee_model = flat_borrow_spread`.
     #[serde(rename = "ff", default, skip_serializing_if = "is_zero_decimal")]
     pub flat_fee_apr: Decimal256,
-    /// Seconds used to turn an APR into index growth. Must be between 31536000 and 31622400
-    /// (365–366 days) so `max_rate` ≤ 1 is at most 100% APR.
-    #[serde(rename = "spy")]
+    /// Fixed at 31536000. Optional on input; must equal 31536000 if provided. Retained so responses keep `spy`.
+    #[serde(rename = "spy", default = "default_seconds_per_year")]
     pub seconds_per_year: u64,
 }
 
@@ -98,13 +95,15 @@ impl RateParamsV1 {
             }
         }
         ensure!(
-            (MIN_SECONDS_PER_YEAR..=MAX_SECONDS_PER_YEAR).contains(&self.seconds_per_year),
-            illegal_argument(
-                "rate_params: seconds_per_year must be between 31536000 and 31622400 (365–366 days)"
-            )
+            self.seconds_per_year == SECONDS_PER_YEAR,
+            illegal_argument("rate_params: seconds_per_year must be 31536000")
         );
         Ok(())
     }
+}
+
+fn default_seconds_per_year() -> u64 {
+    SECONDS_PER_YEAR
 }
 
 fn is_default_fee_model(v: &FeeModelV1) -> bool {

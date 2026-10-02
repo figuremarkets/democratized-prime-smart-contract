@@ -2,7 +2,7 @@
 //! and `apply_pro_rata_liquidity_index_haircut` (bad-debt supplier loss).
 
 use crate::model::error::ContractError;
-use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
+use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1, SECONDS_PER_YEAR};
 use crate::storage::set_reserve_state_v1;
 use crate::utils::rates::{
     apply_pro_rata_liquidity_index_haircut, borrower_rate_from_utilization,
@@ -51,6 +51,42 @@ fn borrower_rate_at_zero_utilization_equals_min_rate() {
         rate,
         params.min_rate,
         "at 0% utilization rate should be min_rate (3.25%)",
+    );
+}
+
+/// One day at 0% utilization grows the borrow index by `min_rate × 86_400 / SECONDS_PER_YEAR`,
+/// even when the stored field is not that constant.
+#[test]
+fn one_day_at_zero_utilization_grows_borrow_index_by_constant_year() {
+    let mut deps = mock_dependencies();
+    let mut params = spreadsheet_rate_params();
+    params.seconds_per_year = 31_622_400;
+    let start = reserve(Decimal256::one(), Decimal256::one(), 1_000_000, 0);
+    set_reserve_state_v1(deps.as_mut().storage, &start).unwrap();
+
+    let accrued = compute_effective_reserve(
+        deps.as_ref().storage,
+        Timestamp::from_seconds(86_400),
+        &params,
+    )
+    .unwrap();
+
+    let growth = params
+        .min_rate
+        .checked_mul(Decimal256::from_ratio(86_400u128, SECONDS_PER_YEAR))
+        .unwrap();
+    let expected = Decimal256::one().checked_add(growth).unwrap();
+    assert_eq!(accrued.borrow_index, expected);
+    assert_eq!(accrued.liquidity_index, Decimal256::one());
+
+    let other_year = params
+        .min_rate
+        .checked_mul(Decimal256::from_ratio(86_400u128, 31_622_400u128))
+        .unwrap();
+    assert_ne!(
+        accrued.borrow_index,
+        Decimal256::one().checked_add(other_year).unwrap(),
+        "accrual must ignore a stored year other than the constant"
     );
 }
 
