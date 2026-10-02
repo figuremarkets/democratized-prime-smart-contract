@@ -1,7 +1,7 @@
 use crate::model::error::{illegal_argument, ContractError};
 use cosmwasm_std::{ensure, Decimal256};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Protocol fee routing mode for splitting borrower interest between suppliers and treasury.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
@@ -39,7 +39,12 @@ pub struct RateParamsV1 {
     #[serde(rename = "ff", default, skip_serializing_if = "is_zero_decimal")]
     pub flat_fee_apr: Decimal256,
     /// Fixed at 31536000. Optional on input; must equal 31536000 if provided. Retained so responses keep `spy`.
-    #[serde(rename = "spy", default = "default_seconds_per_year")]
+    /// Responses report 31536000 even when storage holds a different year.
+    #[serde(
+        rename = "spy",
+        default = "default_seconds_per_year",
+        serialize_with = "serialize_seconds_per_year"
+    )]
     pub seconds_per_year: u64,
 }
 
@@ -104,6 +109,14 @@ impl RateParamsV1 {
 
 fn default_seconds_per_year() -> u64 {
     SECONDS_PER_YEAR
+}
+
+/// Responses advertise the accrual constant, not a stale stored year.
+fn serialize_seconds_per_year<S>(_: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_u64(SECONDS_PER_YEAR)
 }
 
 fn is_default_fee_model(v: &FeeModelV1) -> bool {

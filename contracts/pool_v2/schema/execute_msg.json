@@ -861,7 +861,7 @@
           "$ref": "#/definitions/Decimal256"
         },
         "spy": {
-          "description": "Fixed at 31536000. Optional on input; must equal 31536000 if provided. Retained so responses keep `spy`.",
+          "description": "Fixed at 31536000. Optional on input; must equal 31536000 if provided. Retained so responses keep `spy`. Responses report 31536000 even when storage holds a different year.",
           "default": 31536000,
           "type": "integer",
           "format": "uint64",
