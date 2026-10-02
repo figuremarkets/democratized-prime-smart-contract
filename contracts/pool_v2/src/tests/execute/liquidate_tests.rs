@@ -70,7 +70,7 @@ const ORACLE: &str = "tp1kzcmgmx0qmc37tcpxj32ftakfs2upm49xngh7m";
 const COLLATERAL_DENOM: &str = "nbtc.figure.se";
 /// Second supported collateral used to test liquidation when one feed is stale or missing.
 const UNRELIABLE_COLLATERAL: &str = "neth.figure.se";
-/// 18-decimal collateral for the value_usd band regression.
+/// 18-decimal collateral for the `value_usd` band regression.
 const WEI_COLLATERAL: &str = "wei.eth.figure.se";
 const ONE_WHOLE_18: u128 = 1_000_000_000_000_000_000;
 
