@@ -2,13 +2,14 @@
 //! and failures for non-owner, with funds, and when no accrued reserve.
 
 use crate::constants::{
-    ATTRIBUTE_ACCRUED_RESERVE_REMAINING, ATTRIBUTE_ACTION_NAME, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF,
+    ATTRIBUTE_ACCRUED_RESERVE_REMAINING, ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT,
+    ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF,
 };
 use crate::contract::execute;
 use crate::execute::withdraw_reserve::{ACTION, ASSERT_OWNER_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
-use crate::msg::execute::Cw20ReceivePayload;
+use crate::msg::execute::{Cw20ReceivePayload, EliminateDeficitFunding};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{
     get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow, set_reserve_state_v1,
@@ -668,6 +669,84 @@ fn withdraw_reserve_writes_off_only_the_unbacked_slice_when_borrow_exceeds_liqui
             .accrued_reserve,
         10
     );
+}
+
+/// WithdrawReserve leaves fees booked when the bank cannot pay them yet. A later deficit can
+/// spend that uncollected remainder. Coins are not moved: the remainder was never collected.
+#[test]
+fn eliminate_deficit_spends_booked_but_uncollected_reserve() {
+    let (mut deps, env) = setup_with_accrued_reserve();
+    // L = 1080, B = 1090, AR = 20, bank = 10 → pay 10 and leave 10 booked.
+    install_reserve_snapshot(
+        &mut deps,
+        &env,
+        ReserveSnapshot {
+            total_scaled_liquidity: SIGNED_CAP_SCALED,
+            liquidity_index: SIGNED_CAP_LIQUIDITY_INDEX,
+            total_scaled_borrow: SIGNED_CAP_SCALED,
+            borrow_index: SIGNED_CAP_BORROW_INDEX,
+            accrued_reserve: 20,
+            bank: 10,
+        },
+    );
+
+    let withdraw = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::WithdrawReserve { recipient: None },
+    )
+    .expect("backed surplus should be withdrawable");
+    assert_eq!(sent_lending_amount(&withdraw), 10);
+    assert!(writeoff_attribute(&withdraw).is_none());
+    assert_eq!(
+        response_attribute(&withdraw, ATTRIBUTE_ACCRUED_RESERVE_REMAINING),
+        Some("10")
+    );
+
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(reserve.accrued_reserve, 10);
+    let booked_uncollected = reserve.accrued_reserve;
+    // Deficit arrives after the withdraw. WithdrawReserve itself rejects a positive deficit.
+    reserve.deficit_underlying = 25;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+
+    let response = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OWNER), &[]),
+        ExecuteMsg::EliminateDeficit {
+            funding: EliminateDeficitFunding::AccruedReserve {
+                max_underlying: Uint128::new(100),
+            },
+        },
+    )
+    .expect("uncollected reserve should fund the deficit");
+
+    assert!(
+        response.messages.is_empty(),
+        "spending reserve that was never collected must not send coins"
+    );
+    let cleared: u128 = response
+        .attributes
+        .iter()
+        .find(|attr| attr.key == ATTRIBUTE_AMOUNT)
+        .expect("amount")
+        .value
+        .parse()
+        .unwrap();
+    assert_eq!(cleared, booked_uncollected);
+    assert_eq!(
+        response_attribute(&response, ATTRIBUTE_DEFICIT_UNDERLYING),
+        Some("15")
+    );
+    let after = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    assert_eq!(after.accrued_reserve, 0);
+    assert_eq!(after.deficit_underlying, 15);
+    assert_eq!(after.total_scaled_liquidity, reserve.total_scaled_liquidity);
+    assert_eq!(after.total_scaled_borrow, reserve.total_scaled_borrow);
+    assert_eq!(after.liquidity_index, reserve.liquidity_index);
+    assert_eq!(after.borrow_index, reserve.borrow_index);
 }
 
 #[test]
