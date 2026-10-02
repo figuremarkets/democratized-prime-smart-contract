@@ -21,6 +21,6 @@ pub use query::{
     AssetRequirementV1, BorrowerPositionResponseV1, CollateralRequirementsResponseV1,
     ReserveResponseV1, ReserveStateResponseV1,
 };
-pub use rate_params::{FeeModelV1, RateParamsV1};
+pub use rate_params::{FeeModelV1, RateParamsV1, SECONDS_PER_YEAR};
 pub use reserve::ReserveStateV1;
 pub use state::StateResponseV1;

@@ -13,6 +13,7 @@ use std::str::FromStr;
 fn get_state_returns_contract_and_effective_reserve() {
     let (deps, env) = setup_instantiated();
     let bin = query(deps.as_ref(), env, QueryMsg::GetState {}).expect("query should succeed");
+    let raw = String::from_utf8(bin.as_ref().to_vec()).expect("GetState json");
     let state: StateResponseV1 = from_json(bin).expect("decode GetState response");
     assert_eq!(
         state
@@ -39,6 +40,12 @@ fn get_state_returns_contract_and_effective_reserve() {
     assert_eq!(reserve.total_scaled_borrow, 0);
     assert_eq!(reserve.liquidity_index, Decimal256::one());
     assert_eq!(reserve.borrow_index, Decimal256::one());
+    assert_eq!(state.contract.rate_params.seconds_per_year, 31_536_000);
+    assert!(
+        raw.contains("\"spy\":31536000"),
+        "GetState should keep spy, got {}",
+        raw
+    );
 }
 
 #[test]
