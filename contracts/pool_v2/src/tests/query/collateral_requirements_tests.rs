@@ -701,8 +701,7 @@ fn get_collateral_requirements_18_decimal_two_bump_quote_covers_haircutted_requi
     assert_quote_is_exactly_minimal(display, 18, amount, required_usd);
 }
 
-/// Production collateral is 6 and 9 decimals, where the defect is unreachable. Quotes there
-/// must be unchanged, so the closed form is not a behaviour change for live assets.
+/// Quotes for 6- and 9-decimal assets are unchanged from the two-step form.
 #[test]
 fn get_collateral_requirements_six_decimal_quote_is_unchanged() {
     let display = Decimal256::one();
