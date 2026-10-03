@@ -780,7 +780,7 @@
       "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",
       "oneOf": [
         {
-          "description": "Only the cw-ownable owner may liquidate (current production posture).",
+          "description": "Only the cw-ownable owner may liquidate.",
           "type": "string",
           "enum": [
             "owner_only"

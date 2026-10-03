@@ -95,7 +95,7 @@ pub enum BadDebtLossAllocation {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LiquidationAccess {
-    /// Only the cw-ownable owner may liquidate (current production posture).
+    /// Only the cw-ownable owner may liquidate.
     #[default]
     OwnerOnly,
     /// Any address may liquidate a fully-quoted liquidatable borrower.
