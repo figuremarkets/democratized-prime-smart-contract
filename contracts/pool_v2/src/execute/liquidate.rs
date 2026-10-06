@@ -518,10 +518,7 @@ pub fn liquidate(
             ATTRIBUTE_LIQUIDATION_ACCESS,
             contract.liquidation_access.as_str(),
         )
-        .add_attribute(
-            ATTRIBUTE_DIRECTED_SALE,
-            if directed_fill { "true" } else { "false" },
-        );
+        .add_attribute(ATTRIBUTE_DIRECTED_SALE, directed_fill.to_string());
     if !send_coins.is_empty() {
         res = res.add_message(BankMsg::Send {
             to_address: info.sender.to_string(),

@@ -1,7 +1,7 @@
 use crate::constants::{ATTRIBUTE_CUSTODIAN, CONTRACT_NAME, CONTRACT_VERSION};
 use crate::execute::{
-    add_collateral, borrow, eliminate_deficit, execute_withdraw, lend, liquidate, receive,
-    remove_collateral, repay, set_borrower_required_attrs, set_directed_collateral_sale,
+    add_collateral, adjust_directed_collateral_sale, borrow, eliminate_deficit, execute_withdraw,
+    lend, liquidate, receive, remove_collateral, repay, set_borrower_required_attrs,
     set_lender_require_commit_on_exit, set_lender_required_attrs, set_operational_state,
     socialize_deficit, update_contract_config, update_rate_params, update_supported_collateral,
     withdraw_reserve, UpdateContractConfigParams,
@@ -90,7 +90,7 @@ pub fn execute(
             adjustments,
             expires_at,
             version,
-        } => set_directed_collateral_sale(deps, env, info, &adjustments, expires_at, version),
+        } => adjust_directed_collateral_sale(deps, env, info, &adjustments, expires_at, version),
         ExecuteMsg::Liquidate {
             borrower,
             collateral_to_seize,

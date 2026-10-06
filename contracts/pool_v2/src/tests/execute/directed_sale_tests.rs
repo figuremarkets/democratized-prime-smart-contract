@@ -6,8 +6,8 @@ use crate::constants::{
     ATTRIBUTE_VERSION,
 };
 use crate::contract::{execute, query};
+use crate::execute::adjust_directed_collateral_sale::ACTION;
 use crate::execute::liquidate::{ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
-use crate::execute::set_directed_collateral_sale::ACTION;
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{

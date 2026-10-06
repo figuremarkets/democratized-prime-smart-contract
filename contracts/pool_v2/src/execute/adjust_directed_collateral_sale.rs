@@ -19,7 +19,7 @@ pub const ACTION: &str = "adjust_directed_collateral_sale";
 
 /// Adjust the sender's outstanding offer, or cancel it when `adjustments` normalizes to empty.
 /// Does not check borrower attributes, so a borrower can always cancel or decrease.
-pub fn set_directed_collateral_sale(
+pub fn adjust_directed_collateral_sale(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
