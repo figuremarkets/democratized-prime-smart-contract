@@ -258,6 +258,7 @@ fn update_contract_config_json_deserializes() {
             commit_market_id: None,
             bad_debt_loss_allocation: None,
             custodian: Some(CUSTODIAN.to_owned()),
+            liquidator: None,
         },
     );
 }
@@ -280,6 +281,7 @@ fn update_contract_config_json_deserializes_bad_debt_allocation() {
             commit_market_id: None,
             bad_debt_loss_allocation: Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut),
             custodian: None,
+            liquidator: None,
         },
     );
 }
@@ -302,6 +304,7 @@ fn update_contract_config_json_deserializes_liquidation_access() {
             commit_market_id: None,
             bad_debt_loss_allocation: None,
             custodian: None,
+            liquidator: None,
         },
     );
 }
@@ -323,6 +326,7 @@ fn update_contract_config_json_deserializes_commit_market_id() {
             commit_market_id: Some(42),
             bad_debt_loss_allocation: None,
             custodian: None,
+            liquidator: None,
         },
     );
 }
@@ -344,8 +348,62 @@ fn update_contract_config_json_deserializes_custodian() {
             commit_market_id: None,
             bad_debt_loss_allocation: None,
             custodian: Some(CUSTODIAN.to_owned()),
+            liquidator: None,
         },
     );
+}
+
+#[test]
+fn update_contract_config_json_deserializes_liquidator() {
+    assert_json_deserializes(
+        format!(r#"{{"update_contract_config":{{"liquidator":"{CUSTODIAN}"}}}}"#).as_str(),
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
+            liquidation_access: None,
+            commit_market_id: None,
+            bad_debt_loss_allocation: None,
+            custodian: None,
+            liquidator: Some(CUSTODIAN.to_owned()),
+        },
+    );
+}
+
+#[test]
+fn update_contract_config_json_deserializes_liquidator_only() {
+    use crate::model::LiquidationAccess;
+    assert_json_deserializes(
+        r#"{"update_contract_config":{"liquidation_access":"liquidator_only"}}"#,
+        ExecuteMsg::UpdateContractConfig {
+            margin_rate: None,
+            liquidation_rate: None,
+            liquidation_bonus_rate: None,
+            price_oracle_address: None,
+            min_lend: None,
+            min_borrow: None,
+            max_borrower_collateral_types: None,
+            max_liquidation_staleness_seconds: None,
+            liquidation_access: Some(LiquidationAccess::LiquidatorOnly),
+            commit_market_id: None,
+            bad_debt_loss_allocation: None,
+            custodian: None,
+            liquidator: None,
+        },
+    );
+}
+
+#[test]
+fn update_contract_config_json_rejects_owner_only_liquidation_access() {
+    let err = serde_json::from_str::<ExecuteMsg>(
+        r#"{"update_contract_config":{"liquidation_access":"owner_only"}}"#,
+    );
+    assert!(err.is_err(), "owner_only must not deserialize");
 }
 
 #[test]

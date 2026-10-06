@@ -175,6 +175,7 @@ pub fn instantiate_contract(
     validate_required_attr_patterns(&msg.borrower_required_attrs)?;
 
     let custodian: Addr = deps.api.addr_validate(msg.custodian.trim())?;
+    let liquidator: Addr = deps.api.addr_validate(msg.liquidator.trim())?;
 
     let pool: Addr = env.contract.address.clone();
 
@@ -198,6 +199,7 @@ pub fn instantiate_contract(
         commit_market_id: msg.commit_market_id,
         bad_debt_loss_allocation: msg.bad_debt_loss_allocation,
         custodian: Some(custodian.to_owned()),
+        liquidator: Some(liquidator),
         max_liquidation_staleness_seconds: msg.max_liquidation_staleness_seconds,
         liquidation_access: msg.liquidation_access,
     };
