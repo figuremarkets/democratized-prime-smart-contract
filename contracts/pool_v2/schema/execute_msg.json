@@ -103,25 +103,31 @@
       "additionalProperties": false
     },
     {
-      "description": "Set, replace, or cancel the sender's directed collateral sale. An empty `collateral` map (or all zeros) cancels and ignores `expires_at`. Only the position owner (`info.sender`) can mutate their row. Fill is `Liquidate` with the exact unexpired map, which skips the pre-state liquidatable gate.",
+      "description": "Adjust the sender's outstanding directed collateral sale. Positive amounts add to the live invitation; negative amounts subtract and clamp at zero per asset. An empty `adjustments` map (or all zeros) cancels and ignores `expires_at`. `version` must equal the stored nonce plus one (query `directed_sale_version`). Fill is `Liquidate` with the exact unexpired outstanding map, which skips the pre-state liquidatable gate.",
       "type": "object",
       "required": [
-        "set_directed_collateral_sale"
+        "adjust_directed_collateral_sale"
       ],
       "properties": {
-        "set_directed_collateral_sale": {
+        "adjust_directed_collateral_sale": {
           "type": "object",
           "required": [
-            "collateral",
-            "expires_at"
+            "adjustments",
+            "expires_at",
+            "version"
           ],
           "properties": {
-            "collateral": {
+            "adjustments": {
               "type": "object",
               "additionalProperties": false
             },
             "expires_at": {
               "$ref": "#/definitions/Timestamp"
+            },
+            "version": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
             }
           },
           "additionalProperties": false
@@ -802,6 +808,10 @@
           ]
         }
       ]
+    },
+    "Int128": {
+      "description": "An implementation of i128 that is using strings for JSON encoding/decoding, such that the full i128 range can be used for clients that convert JSON numbers to floats, like JavaScript and jq.\n\n# Examples\n\nUse `from` to create instances of this and `i128` to get the value out:\n\n``` # use cosmwasm_std::Int128; let a = Int128::from(258i128); assert_eq!(a.i128(), 258); ```",
+      "type": "string"
     },
     "LiquidationAccess": {
       "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",

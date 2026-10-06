@@ -166,6 +166,10 @@ pub struct BorrowerPositionResponseV1 {
     /// The borrower's directed-sale offer, including an expired one. `None` when unset, cancelled, or filled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directed_sale_offer: Option<DirectedSaleOfferV1>,
+    /// Directed-sale mutate nonce. `0` if this borrower has never set, adjusted, or cancelled.
+    /// Survives fill and cancel. The next `AdjustDirectedCollateralSale` must use this value plus one.
+    #[serde(default)]
+    pub directed_sale_version: u64,
 }
 
 /// Response for the GetCollateralRequirements query.

@@ -11,7 +11,8 @@ pub use collateral::{
 };
 pub use contract_state::{get_contract_state_v1, set_contract_state_v1};
 pub use directed_sale::{
-    clear_directed_sale_offer, get_directed_sale_offer, set_directed_sale_offer,
+    clear_directed_sale_offer, get_directed_sale_offer, get_directed_sale_version,
+    set_directed_sale_offer, set_directed_sale_version,
 };
 pub use lender_require_commit::{
     get_lender_require_commit_on_exit, remove_lender_require_commit_on_exit,

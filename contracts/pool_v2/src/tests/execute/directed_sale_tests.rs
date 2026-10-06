@@ -1,8 +1,9 @@
 //! Directed collateral sales: one offer per borrower, filled by an exact `Liquidate`.
 
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_COLLATERAL_JSON, ATTRIBUTE_DIRECTED_SALE,
-    ATTRIBUTE_EXPIRES_AT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_COLLATERAL_JSON,
+    ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_EXPIRES_AT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
+    ATTRIBUTE_VERSION,
 };
 use crate::contract::{execute, query};
 use crate::execute::liquidate::{ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
@@ -14,14 +15,16 @@ use crate::model::{
     RateParamsV1, DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
-use crate::storage::{get_borrower_collateral, get_directed_sale_offer, get_scaled_borrow};
+use crate::storage::{
+    get_borrower_collateral, get_directed_sale_offer, get_directed_sale_version, get_scaled_borrow,
+};
 use crate::tests::fixtures::oracle_price_expired_for;
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
     coin, coins, from_json, to_json_binary, Addr, BankMsg, ContractResult, CosmosMsg, Decimal256,
-    Env, MemoryStorage, OwnedDeps, QuerierResult, SystemError, SystemResult, Timestamp, Uint128,
-    WasmQuery,
+    Env, Int128, MemoryStorage, OwnedDeps, QuerierResult, SystemError, SystemResult, Timestamp,
+    Uint128, WasmQuery,
 };
 use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
 use democratized_prime_lib::price_oracle::msg::query::QueryMsg as PriceOracleQueryMsg;
@@ -189,6 +192,36 @@ fn future(env: &Env) -> Timestamp {
     env.block.time.plus_seconds(3_600)
 }
 
+fn delta(amount: i128) -> BTreeMap<String, Int128> {
+    let mut m = BTreeMap::new();
+    m.insert(COLLATERAL_DENOM.to_string(), Int128::from(amount));
+    m
+}
+
+fn next_version(deps: &Deps, sender: &str) -> u64 {
+    get_directed_sale_version(deps.as_ref().storage, sender).unwrap() + 1
+}
+
+fn adjust(
+    deps: &mut Deps,
+    env: &Env,
+    sender: &str,
+    adjustments: BTreeMap<String, Int128>,
+    expires_at: Timestamp,
+) -> Result<cosmwasm_std::Response, ContractError> {
+    let version = next_version(deps, sender);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(sender), &[]),
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments,
+            expires_at,
+            version,
+        },
+    )
+}
+
 fn set_offer(
     deps: &mut Deps,
     env: &Env,
@@ -196,15 +229,11 @@ fn set_offer(
     collateral: BTreeMap<String, Uint128>,
     expires_at: Timestamp,
 ) -> Result<cosmwasm_std::Response, ContractError> {
-    execute(
-        deps.as_mut(),
-        env.clone(),
-        message_info(&Addr::unchecked(sender), &[]),
-        ExecuteMsg::SetDirectedCollateralSale {
-            collateral,
-            expires_at,
-        },
-    )
+    let adjustments = collateral
+        .into_iter()
+        .map(|(k, v)| (k, Int128::from(v.u128() as i128)))
+        .collect();
+    adjust(deps, env, sender, adjustments, expires_at)
 }
 
 fn liquidate(
@@ -284,25 +313,31 @@ fn illegal_contains(err: ContractError, needle: &str) {
 }
 
 #[test]
-fn o1_o2_o3_offer_set_replace_cancel() {
+fn o1_o2_o3_offer_increase_decrease_cancel() {
     let (mut deps, env) = setup_healthy_borrower();
     let exp = future(&env);
-    let res = set_offer(&mut deps, &env, BORROWER, seize(400), exp).expect("set");
+    let res = set_offer(&mut deps, &env, BORROWER, seize(400), exp).expect("increase");
     assert_eq!(attr(&res, ATTRIBUTE_ACTION_NAME), ACTION);
     assert_eq!(attr(&res, ATTRIBUTE_EXPIRES_AT), exp.nanos().to_string());
+    assert_eq!(attr(&res, ATTRIBUTE_VERSION), "1");
     let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
         .unwrap()
         .expect("stored");
     assert_eq!(stored.amounts, seize(400));
     assert_eq!(stored.expires_at, exp);
+    assert_eq!(position(&deps, &env).directed_sale_version, 1);
 
     let exp2 = env.block.time.plus_seconds(7_200);
-    set_offer(&mut deps, &env, BORROWER, seize(200), exp2).expect("replace");
+    adjust(&mut deps, &env, BORROWER, delta(-200), exp2).expect("decrease");
     let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
         .unwrap()
         .unwrap();
     assert_eq!(stored.amounts, seize(200));
-    assert_eq!(stored.expires_at, exp2);
+    assert_eq!(stored.expires_at, exp, "decrease keeps the existing expiry");
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        2
+    );
 
     let res = set_offer(
         &mut deps,
@@ -314,9 +349,11 @@ fn o1_o2_o3_offer_set_replace_cancel() {
     .expect("cancel");
     assert_eq!(attr(&res, ATTRIBUTE_COLLATERAL_JSON), "{}");
     assert_eq!(attr(&res, ATTRIBUTE_EXPIRES_AT), "0");
+    assert_eq!(attr(&res, ATTRIBUTE_VERSION), "3");
     assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
         .unwrap()
         .is_none());
+    assert_eq!(position(&deps, &env).directed_sale_version, 3);
 }
 
 #[test]
@@ -440,6 +477,7 @@ fn o8_frozen_allows_set_and_fill() {
 fn o9_query_returns_live_and_expired_offers() {
     let (mut deps, env) = setup_healthy_borrower();
     assert!(position(&deps, &env).directed_sale_offer.is_none());
+    assert_eq!(position(&deps, &env).directed_sale_version, 0);
     let exp = future(&env);
     set_offer(&mut deps, &env, BORROWER, seize(400), exp).unwrap();
     let got = position(&deps, &env).directed_sale_offer.unwrap();
@@ -904,4 +942,151 @@ fn i3_add_collateral_leaves_the_offer() {
             .amounts,
         seize(400)
     );
+}
+
+#[test]
+fn version_must_be_stored_plus_one() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments: delta(100),
+            expires_at: future(&env),
+            version: 2,
+        },
+    )
+    .unwrap_err();
+    illegal_contains(err, "version must be 1");
+
+    set_offer(&mut deps, &env, BORROWER, seize(100), future(&env)).unwrap();
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments: delta(10),
+            expires_at: future(&env),
+            version: 1,
+        },
+    )
+    .unwrap_err();
+    illegal_contains(err, "version must be 2");
+}
+
+#[test]
+fn fill_does_not_reset_version_and_increase_after_fill_is_residual() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(455), future(&env)).unwrap();
+    liquidate(&mut deps, &env, OWNER, 450, seize(455)).expect("fill 455");
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        1
+    );
+
+    let res = adjust(&mut deps, &env, BORROWER, delta(10), future(&env)).expect("+10 after fill");
+    assert_eq!(attr(&res, ATTRIBUTE_VERSION), "2");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(10)
+    );
+    liquidate(&mut deps, &env, OWNER, 10, seize(10)).expect("fill residual 10");
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        get_borrower_collateral(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .amounts
+            .get(COLLATERAL_DENOM)
+            .copied(),
+        Some(535)
+    );
+}
+
+#[test]
+fn decrease_after_fill_clamps_and_succeeds() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(455), future(&env)).unwrap();
+    liquidate(&mut deps, &env, OWNER, 450, seize(455)).unwrap();
+    let res = adjust(&mut deps, &env, BORROWER, delta(-50), future(&env)).expect("clamp -50");
+    assert_eq!(attr(&res, ATTRIBUTE_APPLIED_JSON), "{}");
+    assert_eq!(attr(&res, ATTRIBUTE_VERSION), "2");
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn multi_asset_decrease_still_applies_when_one_asset_already_zero() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_oracle_prices(&mut deps.querier, {
+        let mut p = prices_with_collateral("1.0");
+        p.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+        p
+    });
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(1000, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .unwrap();
+
+    let mut open = BTreeMap::new();
+    open.insert(COLLATERAL_DENOM.to_string(), Int128::from(50i128));
+    open.insert(UNRELIABLE_COLLATERAL.to_string(), Int128::from(20i128));
+    adjust(&mut deps, &env, BORROWER, open, future(&env)).unwrap();
+
+    adjust(&mut deps, &env, BORROWER, delta(-50), future(&env)).unwrap();
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.amounts.get(UNRELIABLE_COLLATERAL).copied(),
+        Some(Uint128::new(20))
+    );
+    assert!(!stored.amounts.contains_key(COLLATERAL_DENOM));
+
+    let mut close = BTreeMap::new();
+    close.insert(COLLATERAL_DENOM.to_string(), Int128::from(-50i128));
+    close.insert(UNRELIABLE_COLLATERAL.to_string(), Int128::from(-20i128));
+    let res = adjust(&mut deps, &env, BORROWER, close, future(&env)).expect("clamp A, clear B");
+    assert!(attr(&res, ATTRIBUTE_APPLIED_JSON).contains(UNRELIABLE_COLLATERAL));
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn decrease_after_full_repay_does_not_require_debt() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(100), future(&env)).unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(600, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .unwrap();
+    adjust(&mut deps, &env, BORROWER, delta(-40), future(&env)).expect("decrease with no debt");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(60)
+    );
+    let err = adjust(&mut deps, &env, BORROWER, delta(10), future(&env)).unwrap_err();
+    illegal_contains(err, "no debt");
 }

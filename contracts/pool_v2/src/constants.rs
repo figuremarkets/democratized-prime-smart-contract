@@ -29,6 +29,12 @@ pub const ATTRIBUTE_LIQUIDATION_ACCESS: &str = "liquidation_access";
 pub const ATTRIBUTE_DIRECTED_SALE: &str = "directed_sale";
 /// Deadline of a directed-sale offer, as nanoseconds. `"0"` on cancel.
 pub const ATTRIBUTE_EXPIRES_AT: &str = "expires_at";
+/// Requested signed adjustments (denom -> signed amount string).
+pub const ATTRIBUTE_ADJUSTMENTS_JSON: &str = "adjustments_json";
+/// Applied signed deltas after clamp (denom -> signed amount string).
+pub const ATTRIBUTE_APPLIED_JSON: &str = "applied_json";
+/// Directed-sale nonce after a successful borrower mutate.
+pub const ATTRIBUTE_VERSION: &str = "version";
 pub const ATTRIBUTE_BORROW_RATE: &str = "borrow_rate";
 pub const ATTRIBUTE_BORROW_INDEX: &str = "borrow_index";
 pub const ATTRIBUTE_LEND_RATE: &str = "lend_rate";

@@ -2,7 +2,7 @@ use crate::model::{
     BadDebtLossAllocation, CollateralAssetV1, LiquidationAccess, OperationalState, RateParamsV1,
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Decimal256, Timestamp, Uint128};
+use cosmwasm_std::{Decimal256, Int128, Timestamp, Uint128};
 use cw20::Cw20ReceiveMsg;
 use cw_ownable::cw_ownable_execute;
 use std::collections::BTreeMap;
@@ -65,13 +65,15 @@ pub enum ExecuteMsg {
         to_remove: BTreeMap<String, Uint128>,
     },
 
-    /// Set, replace, or cancel the sender's directed collateral sale.
-    /// An empty `collateral` map (or all zeros) cancels and ignores `expires_at`.
-    /// Only the position owner (`info.sender`) can mutate their row. Fill is `Liquidate`
-    /// with the exact unexpired map, which skips the pre-state liquidatable gate.
-    SetDirectedCollateralSale {
-        collateral: BTreeMap<String, Uint128>,
+    /// Adjust the sender's outstanding directed collateral sale. Positive amounts add to the
+    /// live invitation; negative amounts subtract and clamp at zero per asset. An empty
+    /// `adjustments` map (or all zeros) cancels and ignores `expires_at`. `version` must equal
+    /// the stored nonce plus one (query `directed_sale_version`). Fill is `Liquidate` with the
+    /// exact unexpired outstanding map, which skips the pre-state liquidatable gate.
+    AdjustDirectedCollateralSale {
+        adjustments: BTreeMap<String, Int128>,
         expires_at: Timestamp,
+        version: u64,
     },
 
     /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).

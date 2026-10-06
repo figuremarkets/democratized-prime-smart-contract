@@ -19,8 +19,9 @@ pub enum QueryMsg {
     /// (fresh prices), liquidation LTV/health (last-known within the liquidation bound), held denoms
     /// omitted from the borrow-side USD total (`unpriceable_collateral`), held denoms omitted
     /// from liquidation LTV (`liquidation_unpriceable_collateral`: not seizable in a partial
-    /// liquidation; swept on a write-off), and `directed_sale_offer` (present when set, including
-    /// after expiry; absent when never set, cancelled, or filled).
+    /// liquidation; swept on a write-off), `directed_sale_offer` (present when set, including
+    /// after expiry; absent when never set, cancelled, or filled), and `directed_sale_version`
+    /// (mutate nonce; `0` if never adjusted; survives fill and cancel).
     #[returns(BorrowerPositionResponseV1)]
     GetBorrowerPosition { address: String },
     /// Collateral required for a given loan amount (for UI). Per-asset `required` entries

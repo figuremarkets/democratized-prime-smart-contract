@@ -86,10 +86,11 @@ pub fn execute(
         ExecuteMsg::RemoveCollateral { to_remove } => {
             remove_collateral(deps, env, info, &to_remove)
         }
-        ExecuteMsg::SetDirectedCollateralSale {
-            collateral,
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments,
             expires_at,
-        } => set_directed_collateral_sale(deps, env, info, &collateral, expires_at),
+            version,
+        } => set_directed_collateral_sale(deps, env, info, &adjustments, expires_at, version),
         ExecuteMsg::Liquidate {
             borrower,
             collateral_to_seize,
