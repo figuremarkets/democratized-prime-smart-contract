@@ -66,13 +66,18 @@ pub enum ExecuteMsg {
     },
 
     /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default liquidator-only).
-    /// Permissionless still requires the owner when unpriceable collateral is load-bearing.
-    /// Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is
-    /// `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in
-    /// [100%, liquidation_bonus_rate] of the amount repaid, except a $0 remainder waives the 100% floor.
+    /// Permissionless still requires the owner when unpriceable collateral is load-bearing or a
+    /// write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full
+    /// scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral
+    /// value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off,
+    /// or a full repay that seizes nothing, waives the 100% floor. A write-off requires
+    /// pre-seizure priced collateral market value below the debt payoff; otherwise emptying the
+    /// map requires the full payoff. A write-off sweeps every
+    /// remaining collateral unit to the liquidator. A full repay leaves that collateral in place.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.
+        /// Empty (or all zeros) is allowed only when nothing priceable is held: a partial repay writes the residual off and sweeps, and a full repay leaves the collateral with the borrower.
         collateral_to_seize: BTreeMap<String, Uint128>,
     },
 
@@ -82,10 +87,12 @@ pub enum ExecuteMsg {
         to_remove: Vec<String>,
     },
 
-    /// Withdraw accrued protocol reserve (contract owner only; no funds). Sends at most the bank
-    /// surplus above lender claims to the recipient, or to the contract owner if recipient is None.
-    /// Then zeros the booked bucket. If the cap binds, the unbacked remainder is emitted as
-    /// `unbacked_reserve_writeoff`. Blocked while `deficit_underlying` is positive.
+    /// Withdraw accrued protocol reserve (contract owner only; no funds). Pays `min(backed, bank)`
+    /// to the recipient, or to the contract owner if recipient is None, where backed reserve is
+    /// `min(accrued_reserve, bank + B − L)`. Uncollected reserve stays booked. Every response
+    /// includes `accrued_reserve_remaining` and `unbacked_reserve_writeoff`, including when the
+    /// value is 0. Only reserve above `bank + B − L` is written off. Blocked while
+    /// `deficit_underlying` is positive.
     WithdrawReserve {
         /// Address to receive the reserve; if None, sends to the contract owner.
         recipient: Option<String>,

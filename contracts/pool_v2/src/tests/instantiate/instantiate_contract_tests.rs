@@ -7,6 +7,7 @@ use crate::constants::{
 };
 use crate::instantiate::{instantiate_contract, reply};
 use crate::model::error::ContractError;
+use crate::model::rate_params::{MAX_SECONDS_PER_YEAR, MIN_SECONDS_PER_YEAR};
 use crate::model::{
     BadDebtLossAllocation, CollateralAssetV1, Denom, LiquidationAccess, RateParamsV1,
     MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS, MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
@@ -939,26 +940,64 @@ fn instantiate_fails_rate_params_reserve_factor_one() {
     }
 }
 
+const SECONDS_PER_YEAR_RANGE_ERR: &str =
+    "rate_params: seconds_per_year must be between 31536000 and 31622400 (365–366 days)";
+
 #[test]
-fn instantiate_fails_rate_params_seconds_per_year_zero() {
-    let mut deps = mock_provenance_dependencies();
-    deps.api = deps.api.with_prefix("tp");
-    let mut msg = default_instantiate_msg();
-    msg.rate_params.seconds_per_year = 0;
+fn instantiate_fails_rate_params_seconds_per_year_outside_year() {
+    for spy in [
+        0u64,
+        1,
+        86_400,
+        MIN_SECONDS_PER_YEAR - 1,
+        MAX_SECONDS_PER_YEAR + 1,
+    ] {
+        let mut deps = mock_provenance_dependencies();
+        deps.api = deps.api.with_prefix("tp");
+        let mut msg = default_instantiate_msg();
+        msg.rate_params.seconds_per_year = spy;
 
-    let err = instantiate_contract(
-        deps.as_mut(),
-        mock_env(),
-        message_info(&Addr::unchecked(OWNER), &[]),
-        msg,
-    )
-    .unwrap_err();
+        let err = instantiate_contract(
+            deps.as_mut(),
+            mock_env(),
+            message_info(&Addr::unchecked(OWNER), &[]),
+            msg,
+        )
+        .unwrap_err();
 
-    match &err {
-        ContractError::IllegalArgumentError { message } => {
-            assert!(message.contains("seconds_per_year"));
+        match &err {
+            ContractError::IllegalArgumentError { message } => {
+                assert_eq!(
+                    message, SECONDS_PER_YEAR_RANGE_ERR,
+                    "spy {spy} should be rejected with the year bound"
+                );
+            }
+            _ => panic!(
+                "expected IllegalArgumentError for spy {}, got {:?}",
+                spy, err
+            ),
         }
-        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn instantiate_succeeds_rate_params_seconds_per_year_at_year_bounds() {
+    for spy in [MIN_SECONDS_PER_YEAR, MAX_SECONDS_PER_YEAR] {
+        let mut deps = mock_provenance_dependencies();
+        deps.api = deps.api.with_prefix("tp");
+        let mut msg = default_instantiate_msg();
+        msg.rate_params.seconds_per_year = spy;
+
+        instantiate_contract(
+            deps.as_mut(),
+            mock_env(),
+            message_info(&Addr::unchecked(OWNER), &[]),
+            msg,
+        )
+        .unwrap_or_else(|err| panic!("instantiate should succeed for spy {}, got {:?}", spy, err));
+
+        let state = get_contract_state_v1(deps.as_ref().storage).unwrap();
+        assert_eq!(state.rate_params.seconds_per_year, spy);
     }
 }
 

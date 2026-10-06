@@ -13,6 +13,9 @@ pub const ATTRIBUTE_BORROWER: &str = "borrower";
 pub const ATTRIBUTE_BORROWER_REQUIRED_ATTRS_JSON: &str = "borrower_required_attrs_json";
 /// Attribute key for collateral; value is JSON object (denom -> amount string). Uses `_json` suffix for JSON payloads.
 pub const ATTRIBUTE_COLLATERAL_JSON: &str = "collateral_json";
+/// Remainder swept to the liquidator on a bad-debt write-off (denom -> amount string).
+/// Emitted only when that remainder is non-empty. `collateral_json` stays the requested seizure.
+pub const ATTRIBUTE_SWEPT_COLLATERAL_JSON: &str = "swept_collateral_json";
 pub const ATTRIBUTE_CONTRACT_STATE_JSON: &str = "contract_state_json";
 /// Full `RateParamsV1` JSON on instantiate and `UpdateRateParams`. Uses `_json` suffix for JSON payloads.
 pub const ATTRIBUTE_RATE_PARAMS_JSON: &str = "rate_params_json";
@@ -40,7 +43,11 @@ pub const ATTRIBUTE_REPO_TOKEN_ADDRESS: &str = "repo_token_cw20_address";
 pub const ATTRIBUTE_BAD_DEBT_UNDERLYING: &str = "bad_debt_underlying";
 /// Remaining reserve `deficit_underlying`.
 pub const ATTRIBUTE_DEFICIT_UNDERLYING: &str = "deficit_underlying";
-/// Unbacked `accrued_reserve` closed by WithdrawReserve's solvency cap (lending base units).
+/// Unbacked `accrued_reserve` closed by WithdrawReserve (lending base units).
+/// Always present on that response, including 0.
 pub const ATTRIBUTE_UNBACKED_RESERVE_WRITEOFF: &str = "unbacked_reserve_writeoff";
+/// Backed `accrued_reserve` left booked after WithdrawReserve (lending base units).
+/// Always present on that response, including 0.
+pub const ATTRIBUTE_ACCRUED_RESERVE_REMAINING: &str = "accrued_reserve_remaining";
 /// Pool config `bad_debt_loss_allocation` when a liquidation hits the bad-debt path.
 pub const ATTRIBUTE_BAD_DEBT_LOSS_ALLOCATION: &str = "bad_debt_loss_allocation";
