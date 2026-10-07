@@ -1,9 +1,10 @@
 use crate::constants::{ATTRIBUTE_CUSTODIAN, CONTRACT_NAME, CONTRACT_VERSION};
 use crate::execute::{
-    add_collateral, borrow, eliminate_deficit, execute_withdraw, lend, liquidate, receive,
-    remove_collateral, repay, set_borrower_required_attrs, set_lender_require_commit_on_exit,
-    set_lender_required_attrs, set_operational_state, socialize_deficit, update_contract_config,
-    update_rate_params, update_supported_collateral, withdraw_reserve, UpdateContractConfigParams,
+    add_collateral, adjust_directed_collateral_sale, borrow, eliminate_deficit, execute_withdraw,
+    lend, liquidate, receive, remove_collateral, repay, set_borrower_required_attrs,
+    set_lender_require_commit_on_exit, set_lender_required_attrs, set_operational_state,
+    socialize_deficit, update_contract_config, update_rate_params, update_supported_collateral,
+    withdraw_reserve, UpdateContractConfigParams,
 };
 use crate::instantiate::{instantiate_contract, reply as reply_handler};
 use crate::model::error::{illegal_argument, illegal_state, ContractError, QueryError};
@@ -85,6 +86,11 @@ pub fn execute(
         ExecuteMsg::RemoveCollateral { to_remove } => {
             remove_collateral(deps, env, info, &to_remove)
         }
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments,
+            expires_at,
+            version,
+        } => adjust_directed_collateral_sale(deps, env, info, &adjustments, expires_at, version),
         ExecuteMsg::Liquidate {
             borrower,
             collateral_to_seize,

@@ -103,7 +103,40 @@
       "additionalProperties": false
     },
     {
-      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). Permissionless still requires the owner when unpriceable collateral is load-bearing or a write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off, or a full repay that seizes nothing, waives the 100% floor. A write-off requires pre-seizure priced collateral market value below the debt payoff; otherwise emptying the map requires the full payoff. A write-off sweeps every remaining collateral unit to the liquidator. A full repay leaves that collateral in place.",
+      "description": "Adjust the sender's outstanding directed collateral sale. Positive amounts add to the live invitation; negative amounts subtract and clamp at zero per asset. An empty `adjustments` map (or all zeros) cancels and ignores `expires_at`. `version` must equal the stored nonce plus one (query `directed_sale_version`). Fill is `Liquidate` with a non-empty subset of the unexpired outstanding map, which skips the pre-state liquidatable gate.",
+      "type": "object",
+      "required": [
+        "adjust_directed_collateral_sale"
+      ],
+      "properties": {
+        "adjust_directed_collateral_sale": {
+          "type": "object",
+          "required": [
+            "adjustments",
+            "expires_at",
+            "version"
+          ],
+          "properties": {
+            "adjustments": {
+              "type": "object",
+              "additionalProperties": false
+            },
+            "expires_at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "version": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only). A live directed-sale offer that contains `collateral_to_seize` (non-empty subset) skips the pre-state liquidatable check and the load-bearing unpriceable owner check. The write-off sweep of unpriceable collateral still requires the owner. Every other call is unchanged. Permissionless still requires the owner when unpriceable collateral is load-bearing or a write-off would sweep it. Liquidator repays via funds (one coin, lending denom); full scaled-debt cancel is `ceil(scaled · borrow_index)`, excess refunded. Seized collateral value must be in [100%, liquidation_bonus_rate] of the amount repaid, except a write-off, or a full repay that seizes nothing, waives the 100% floor. A write-off requires pre-seizure priced collateral market value below the debt payoff; otherwise emptying the map requires the full payoff. A write-off sweeps every remaining collateral unit to the liquidator. A full repay leaves that collateral in place.",
       "type": "object",
       "required": [
         "liquidate"
@@ -775,6 +808,10 @@
           ]
         }
       ]
+    },
+    "Int128": {
+      "description": "An implementation of i128 that is using strings for JSON encoding/decoding, such that the full i128 range can be used for clients that convert JSON numbers to floats, like JavaScript and jq.\n\n# Examples\n\nUse `from` to create instances of this and `i128` to get the value out:\n\n``` # use cosmwasm_std::Int128; let a = Int128::from(258i128); assert_eq!(a.i128(), 258); ```",
+      "type": "string"
     },
     "LiquidationAccess": {
       "description": "Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only. [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`], [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0` (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing (counting last-known of dropped feeds would make the position not liquidatable, or a dropped feed has no stored quote) still requires the owner. Paused still blocks Liquidate for everyone.",

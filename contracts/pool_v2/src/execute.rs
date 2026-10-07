@@ -1,4 +1,5 @@
 pub mod add_collateral;
+pub mod adjust_directed_collateral_sale;
 pub mod borrow;
 pub mod eliminate_deficit;
 pub mod lend;
@@ -19,6 +20,7 @@ pub mod withdraw;
 pub mod withdraw_reserve;
 
 pub use add_collateral::add_collateral;
+pub use adjust_directed_collateral_sale::adjust_directed_collateral_sale;
 pub use borrow::borrow;
 pub use eliminate_deficit::eliminate_deficit;
 pub use lend::lend;
