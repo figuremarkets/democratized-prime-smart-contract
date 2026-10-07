@@ -1,4 +1,4 @@
-//! Directed collateral sales: one offer per borrower, filled by an exact `Liquidate`.
+//! Directed collateral sales: one offer per borrower, filled by a subset `Liquidate`.
 
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_COLLATERAL_JSON,
@@ -674,6 +674,21 @@ fn f11_post_health_still_required() {
 }
 
 #[test]
+fn f11_partial_nibble_on_unhealthy_still_fails_post_health() {
+    let (mut deps, env) = setup_unhealthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(200), future(&env)).unwrap();
+    let err = liquidate(&mut deps, &env, OWNER, 44, seize(50)).unwrap_err();
+    illegal_contains(err, "margin_rate");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(200)
+    );
+}
+
+#[test]
 fn f12_excess_lending_funds_are_refunded() {
     let (mut deps, env) = setup_healthy_borrower();
     set_offer(&mut deps, &env, BORROWER, seize(605), future(&env)).unwrap();
@@ -689,18 +704,70 @@ fn f12_excess_lending_funds_are_refunded() {
 }
 
 #[test]
-fn f13_c2_non_exact_seize_on_healthy_book_fails_ltv_gate() {
+fn f13_partial_seize_on_healthy_book_is_directed() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(455), exp).unwrap();
+    let res = liquidate(&mut deps, &env, OWNER, 99, seize(100)).expect("partial directed");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "true");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.amounts, seize(355));
+    assert_eq!(stored.expires_at, exp);
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        1
+    );
+}
+
+#[test]
+fn f13_partial_then_remainder_clears() {
     let (mut deps, env) = setup_healthy_borrower();
     set_offer(&mut deps, &env, BORROWER, seize(455), future(&env)).unwrap();
-    let err = liquidate(&mut deps, &env, OWNER, 450, seize(100)).unwrap_err();
-    illegal_contains(err, "not liquidatable");
+    liquidate(&mut deps, &env, OWNER, 99, seize(100)).expect("first partial");
+    let res = liquidate(&mut deps, &env, OWNER, 349, seize(355)).expect("remainder");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "true");
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
     assert_eq!(
-        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
-            .unwrap()
-            .unwrap()
-            .amounts,
-        seize(455)
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        1
     );
+}
+
+#[test]
+fn f13_multi_asset_subset_keeps_other_denom() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let mut prices = prices_with_collateral("1.0");
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.0"));
+    set_oracle_prices(&mut deps.querier, prices);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(100, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .unwrap();
+    let exp = future(&env);
+    let mut offer = seize(100);
+    offer.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(50));
+    set_offer(&mut deps, &env, BORROWER, offer, exp).unwrap();
+    let res = liquidate(&mut deps, &env, OWNER, 99, seize(100)).expect("btc subset");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "true");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.amounts.get(UNRELIABLE_COLLATERAL).copied(),
+        Some(Uint128::new(50))
+    );
+    assert!(!stored.amounts.contains_key(COLLATERAL_DENOM));
+    assert_eq!(stored.expires_at, exp);
 }
 
 #[test]
@@ -795,6 +862,62 @@ fn c3_non_exact_seize_on_liquidatable_book_keeps_the_offer() {
             .unwrap()
             .amounts,
         seize(100)
+    );
+}
+
+#[test]
+fn c2_over_seize_on_healthy_book_fails_ltv_gate() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(100), future(&env)).unwrap();
+    let err = liquidate(&mut deps, &env, OWNER, 450, seize(455)).unwrap_err();
+    illegal_contains(err, "not liquidatable");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(100)
+    );
+}
+
+#[test]
+fn c2_extra_denom_on_healthy_book_fails_ltv_gate() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(455), future(&env)).unwrap();
+    let mut extra = seize(100);
+    extra.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(1));
+    let err = liquidate(&mut deps, &env, OWNER, 99, extra).unwrap_err();
+    illegal_contains(err, "not liquidatable");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(455)
+    );
+}
+
+#[test]
+fn c3_partial_does_not_block_later_classic_liquidation() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(455), future(&env)).unwrap();
+    liquidate(&mut deps, &env, OWNER, 99, seize(100)).expect("partial directed");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(355)
+    );
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("0.75"));
+    let res = liquidate(&mut deps, &env, OWNER, 340, seize(455)).expect("classic over remaining");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "false");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(355)
     );
 }
 

@@ -17,7 +17,10 @@ pub use contract_state::{
     MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS,
 };
 pub use denom::Denom;
-pub use directed_sale::{is_live, maps_equal_normalized, normalize_seize_map, DirectedSaleOfferV1};
+pub use directed_sale::{
+    is_live, maps_equal_normalized, normalize_seize_map, is_seize_within_offer, subtract_seize,
+    DirectedSaleOfferV1,
+};
 pub use error::{ContractError, QueryError};
 pub use query::{
     AssetRequirementV1, BorrowerPositionResponseV1, CollateralRequirementsResponseV1,
