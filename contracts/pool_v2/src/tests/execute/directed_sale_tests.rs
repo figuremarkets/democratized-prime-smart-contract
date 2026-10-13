@@ -6,7 +6,7 @@ use crate::constants::{
 };
 use crate::contract::{execute, query};
 use crate::execute::adjust_directed_collateral_sale::ACTION;
-use crate::execute::liquidate::{ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
+use crate::execute::liquidate::{ASSERT_LIQUIDATOR_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{
@@ -80,6 +80,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: OWNER.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -294,9 +295,10 @@ fn set_liquidation_access(deps: &mut Deps, env: &Env, access: LiquidationAccess)
                 LiquidationAccess::Permissionless => {
                     Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut)
                 }
-                LiquidationAccess::OwnerOnly => None,
+                LiquidationAccess::LiquidatorOnly => None,
             },
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set liquidation_access");
@@ -596,7 +598,7 @@ fn f5_owner_only_rejects_non_owner() {
     let err = liquidate(&mut deps, &env, OTHER, 450, seize(455)).unwrap_err();
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
     ));
     assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
         .unwrap()
