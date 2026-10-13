@@ -9,7 +9,7 @@ use crate::model::rate_params::MAX_SECONDS_PER_YEAR;
 use crate::model::{CollateralAssetV1, Denom, FeeModelV1, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
-use crate::tests::query::common::{CUSTODIAN, OWNER, SOME_USER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER, SOME_USER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::compute_effective_reserve;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
@@ -62,6 +62,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }

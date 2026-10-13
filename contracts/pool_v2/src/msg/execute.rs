@@ -76,7 +76,7 @@ pub enum ExecuteMsg {
         version: u64,
     },
 
-    /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default owner-only).
+    /// Liquidate a borrower. Auth follows [`crate::model::LiquidationAccess`] (default liquidator-only).
     /// A live directed-sale offer that contains `collateral_to_seize` (non-empty subset) skips the
     /// pre-state liquidatable check and the load-bearing unpriceable owner check. The write-off
     /// sweep of unpriceable collateral still requires the owner. Every other call is unchanged.
@@ -147,9 +147,11 @@ pub enum ExecuteMsg {
         bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
         /// If provided, custodianship will be transferred to the given account.
         custodian: Option<String>,
+        /// If provided, changes the account authorized for restricted liquidations.
+        liquidator: Option<String>,
         /// Seconds past oracle expiration after which a stored price is unpriceable for
         /// liquidation. Omitted / JSON `null` = no change. `0` disables last-known. Must be
-        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (owner-only) or
+        /// ≤ [`crate::model::MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS`] (liquidator-only) or
         /// [`crate::model::MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`] (permissionless).
         #[serde(default)]
         max_liquidation_staleness_seconds: Option<u64>,

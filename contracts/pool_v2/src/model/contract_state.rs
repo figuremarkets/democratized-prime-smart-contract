@@ -1,6 +1,7 @@
 use cosmwasm_std::{ensure, Addr, Decimal256, Uint128};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::collateral::CollateralAssetV1;
 use crate::model::error::{illegal_argument, illegal_state, ContractError};
@@ -19,7 +20,7 @@ use crate::model::{Denom, RateParamsV1};
 pub const DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS: u64 = 60 * 60;
 
 /// Hard cap so a custodian cannot restore last-known prices into "this quote is
-/// meaningless" territory. Applies only under [`LiquidationAccess::OwnerOnly`].
+/// meaningless" territory. Applies only under [`LiquidationAccess::LiquidatorOnly`].
 pub const MAX_ALLOWED_LIQUIDATION_STALENESS_SECONDS: u64 = 24 * 60 * 60;
 
 /// Last-known window allowed with [`LiquidationAccess::Permissionless`]. Same as the
@@ -85,7 +86,7 @@ pub enum BadDebtLossAllocation {
     ImmediateLiquidityIndexHaircut,
 }
 
-/// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains owner-only.
+/// Who may call [`crate::msg::ExecuteMsg::Liquidate`]. Default remains liquidator-only.
 /// [`Self::Permissionless`] requires last-known ≤ [`MAX_PERMISSIONLESS_LIQUIDATION_STALENESS_SECONDS`],
 /// [`BadDebtLossAllocation::ImmediateLiquidityIndexHaircut`], and `deficit_underlying == 0`
 /// (see [`ensure_permissionless_config`]). Unpriceable collateral that is load-bearing
@@ -95,9 +96,9 @@ pub enum BadDebtLossAllocation {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LiquidationAccess {
-    /// Only the cw-ownable owner may liquidate (current production posture).
+    /// Only the configured liquidator may liquidate.
     #[default]
-    OwnerOnly,
+    LiquidatorOnly,
     /// Any address may liquidate a fully-quoted liquidatable borrower.
     /// Unpriceable collateral that is load-bearing still requires the owner.
     Permissionless,
@@ -106,10 +107,33 @@ pub enum LiquidationAccess {
 impl LiquidationAccess {
     pub fn as_str(self) -> &'static str {
         match self {
-            LiquidationAccess::OwnerOnly => "owner_only",
+            LiquidationAccess::LiquidatorOnly => "liquidator_only",
             LiquidationAccess::Permissionless => "permissionless",
         }
     }
+}
+
+/// Parse persisted [`ContractStateV1::liquidation_access`] (`la`). Legacy pools stored
+/// `owner_only` before the liquidator role was split out; that tag maps to
+/// [`LiquidationAccess::LiquidatorOnly`]. Execute/instantiate JSON does not use this helper.
+fn liquidation_access_from_storage_str(s: &str) -> Result<LiquidationAccess, String> {
+    match s {
+        "liquidator_only" | "owner_only" => Ok(LiquidationAccess::LiquidatorOnly),
+        "permissionless" => Ok(LiquidationAccess::Permissionless),
+        other => Err(format!(
+            "unknown variant `{other}`, expected `liquidator_only`, `owner_only`, or `permissionless`"
+        )),
+    }
+}
+
+fn deserialize_liquidation_access_from_storage<'de, D>(
+    deserializer: D,
+) -> Result<LiquidationAccess, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    liquidation_access_from_storage_str(&s).map_err(DeError::custom)
 }
 
 impl BadDebtLossAllocation {
@@ -205,6 +229,11 @@ pub struct ContractStateV1 {
     /// - update the types of collateral supported by the contract
     pub custodian: Option<Addr>,
 
+    /// The account authorized to liquidate when liquidation access is restricted.
+    /// `None` is only valid while decoding legacy state before migration backfills the owner.
+    #[serde(rename = "lqr", default)]
+    pub liquidator: Option<Addr>,
+
     /// Seconds past oracle expiration after which a stored price is unpriceable for
     /// liquidation (valued at $0, not seizable). Fresh prices and last-known prices still
     /// within this bound remain usable. Default 1 hour; capped at 24 hours. `0` disables
@@ -212,9 +241,13 @@ pub struct ContractStateV1 {
     #[serde(rename = "mlss", default = "default_max_liquidation_staleness_seconds")]
     pub max_liquidation_staleness_seconds: u64,
 
-    /// Who may call Liquidate. Default [`LiquidationAccess::OwnerOnly`] so older state
-    /// blobs and omitted instantiate JSON stay owner-gated.
-    #[serde(rename = "la", default)]
+    /// Who may call Liquidate. Default [`LiquidationAccess::LiquidatorOnly`].
+    /// Legacy on-chain JSON may still use `owner_only`; see [`liquidation_access_from_storage_str`].
+    #[serde(
+        rename = "la",
+        default,
+        deserialize_with = "deserialize_liquidation_access_from_storage"
+    )]
     pub liquidation_access: LiquidationAccess,
 }
 
@@ -224,5 +257,27 @@ impl ContractStateV1 {
         self.repo_token_cw20_address
             .clone()
             .ok_or_else(|| illegal_state("repo token not bound"))
+    }
+}
+
+#[cfg(test)]
+mod liquidation_access_storage_tests {
+    use super::*;
+
+    #[test]
+    fn liquidation_access_from_storage_str_maps_owner_only_to_liquidator_only() {
+        assert_eq!(
+            liquidation_access_from_storage_str("owner_only").unwrap(),
+            LiquidationAccess::LiquidatorOnly
+        );
+        assert_eq!(
+            liquidation_access_from_storage_str("liquidator_only").unwrap(),
+            LiquidationAccess::LiquidatorOnly
+        );
+        assert_eq!(
+            liquidation_access_from_storage_str("permissionless").unwrap(),
+            LiquidationAccess::Permissionless
+        );
+        assert!(liquidation_access_from_storage_str("bogus").is_err());
     }
 }
