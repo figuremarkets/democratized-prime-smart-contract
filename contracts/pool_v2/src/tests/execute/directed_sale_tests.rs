@@ -1,9 +1,8 @@
 //! Directed collateral sales: one offer per borrower, filled by a subset `Liquidate`.
 
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_COLLATERAL_JSON,
-    ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_EXPIRES_AT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
-    ATTRIBUTE_VERSION,
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_EXPIRES_AT,
+    ATTRIBUTE_SWEPT_COLLATERAL_JSON, ATTRIBUTE_VERSION,
 };
 use crate::contract::{execute, query};
 use crate::execute::adjust_directed_collateral_sale::ACTION;
@@ -347,7 +346,7 @@ fn o1_o2_o3_offer_increase_decrease_cancel() {
         Timestamp::from_nanos(0),
     )
     .expect("cancel");
-    assert_eq!(attr(&res, ATTRIBUTE_COLLATERAL_JSON), "{}");
+    assert_eq!(attr(&res, ATTRIBUTE_APPLIED_JSON), "{}");
     assert_eq!(attr(&res, ATTRIBUTE_EXPIRES_AT), "0");
     assert_eq!(attr(&res, ATTRIBUTE_VERSION), "3");
     assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)

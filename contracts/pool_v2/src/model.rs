@@ -18,7 +18,7 @@ pub use contract_state::{
 };
 pub use denom::Denom;
 pub use directed_sale::{
-    is_live, maps_equal_normalized, normalize_seize_map, is_seize_within_offer, subtract_seize,
+    is_live, is_seize_within_offer, maps_equal_normalized, normalize_seize_map, subtract_seize,
     DirectedSaleOfferV1,
 };
 pub use error::{ContractError, QueryError};

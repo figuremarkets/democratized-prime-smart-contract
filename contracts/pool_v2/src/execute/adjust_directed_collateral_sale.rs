@@ -2,8 +2,8 @@
 //! Signed amounts add or subtract (clamp at zero). Fill is `Liquidate`, not this message.
 
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_ADJUSTMENTS_JSON, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_BORROWER,
-    ATTRIBUTE_COLLATERAL_JSON, ATTRIBUTE_EXPIRES_AT, ATTRIBUTE_VERSION,
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_BORROWER, ATTRIBUTE_EXPIRES_AT,
+    ATTRIBUTE_VERSION,
 };
 use crate::model::directed_sale::DirectedSaleOfferV1;
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
@@ -44,14 +44,7 @@ pub fn adjust_directed_collateral_sale(
     if requested.is_empty() {
         clear_directed_sale_offer(deps.storage, borrower)?;
         set_directed_sale_version(deps.storage, borrower, version)?;
-        return Ok(response(
-            borrower,
-            &requested,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            "0",
-            version,
-        ));
+        return Ok(response(borrower, &BTreeMap::new(), "0", version));
     }
 
     let any_increase = requested.values().any(|d| d.i128() > 0);
@@ -128,14 +121,7 @@ pub fn adjust_directed_collateral_sale(
     if outstanding.is_empty() {
         clear_directed_sale_offer(deps.storage, borrower)?;
         set_directed_sale_version(deps.storage, borrower, version)?;
-        return Ok(response(
-            borrower,
-            &requested,
-            &applied,
-            &outstanding,
-            "0",
-            version,
-        ));
+        return Ok(response(borrower, &applied, "0", version));
     }
 
     let offer_expires_at = if any_increase {
@@ -148,16 +134,14 @@ pub fn adjust_directed_collateral_sale(
     };
 
     let offer = DirectedSaleOfferV1 {
-        amounts: outstanding.clone(),
+        amounts: outstanding,
         expires_at: offer_expires_at,
     };
     set_directed_sale_offer(deps.storage, borrower, &offer)?;
     set_directed_sale_version(deps.storage, borrower, version)?;
     Ok(response(
         borrower,
-        &requested,
         &applied,
-        &outstanding,
         &offer_expires_at.nanos().to_string(),
         version,
     ))
@@ -172,21 +156,11 @@ fn normalize_adjustments(map: &BTreeMap<String, Int128>) -> BTreeMap<String, Int
 
 fn response(
     borrower: &str,
-    requested: &BTreeMap<String, Int128>,
     applied: &BTreeMap<String, Int128>,
-    outstanding: &BTreeMap<String, Uint128>,
     expires_at: &str,
     version: u64,
 ) -> Response {
-    let adjustments_json: BTreeMap<String, String> = requested
-        .iter()
-        .map(|(id, amt)| (id.clone(), amt.to_string()))
-        .collect();
     let applied_json: BTreeMap<String, String> = applied
-        .iter()
-        .map(|(id, amt)| (id.clone(), amt.to_string()))
-        .collect();
-    let collateral_json: BTreeMap<String, String> = outstanding
         .iter()
         .map(|(id, amt)| (id.clone(), amt.to_string()))
         .collect();
@@ -194,16 +168,8 @@ fn response(
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
         .add_attribute(ATTRIBUTE_BORROWER, borrower)
         .add_attribute(
-            ATTRIBUTE_ADJUSTMENTS_JSON,
-            serde_json::to_string(&adjustments_json).unwrap_or_default(),
-        )
-        .add_attribute(
             ATTRIBUTE_APPLIED_JSON,
             serde_json::to_string(&applied_json).unwrap_or_default(),
-        )
-        .add_attribute(
-            ATTRIBUTE_COLLATERAL_JSON,
-            serde_json::to_string(&collateral_json).unwrap_or_default(),
         )
         .add_attribute(ATTRIBUTE_EXPIRES_AT, expires_at)
         .add_attribute(ATTRIBUTE_VERSION, version.to_string())
