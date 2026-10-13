@@ -27,6 +27,28 @@ pub fn assert_custodian(
     Ok(())
 }
 
+/// Asserts the sender is the designated liquidator for the contract.
+pub fn assert_liquidator(
+    contract_state: &ContractStateV1,
+    sender: &Addr,
+    not_liquidator_message: impl AsRef<str>,
+) -> Result<(), ContractError> {
+    let liquidator =
+        contract_state
+            .liquidator
+            .as_ref()
+            .ok_or_else(|| ContractError::NotAuthorizedError {
+                message: "contract liquidator not set".to_owned(),
+            })?;
+    ensure!(
+        sender == liquidator,
+        ContractError::NotAuthorizedError {
+            message: not_liquidator_message.as_ref().to_owned()
+        }
+    );
+    Ok(())
+}
+
 /// Asserts the sender is either the contract owner or the designated custodian
 /// for the contract.
 pub fn assert_owner_or_custodian(

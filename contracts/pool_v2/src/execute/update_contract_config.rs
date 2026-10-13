@@ -36,6 +36,7 @@ pub struct UpdateContractConfigParams {
     pub commit_market_id: Option<u32>,
     pub bad_debt_loss_allocation: Option<BadDebtLossAllocation>,
     pub custodian: Option<String>,
+    pub liquidator: Option<String>,
     pub max_liquidation_staleness_seconds: Option<u64>,
     pub liquidation_access: Option<LiquidationAccess>,
 }
@@ -65,6 +66,7 @@ pub fn update_contract_config(
         || params.commit_market_id.is_some()
         || params.bad_debt_loss_allocation.is_some()
         || params.custodian.is_some()
+        || params.liquidator.is_some()
         || params.max_liquidation_staleness_seconds.is_some()
         || params.liquidation_access.is_some();
     ensure!(
@@ -135,6 +137,10 @@ pub fn update_contract_config(
     if let Some(new_custodian) = params.custodian {
         let new_custodian = deps.api.addr_validate(new_custodian.trim())?;
         contract.custodian = Some(new_custodian);
+    }
+    if let Some(new_liquidator) = params.liquidator {
+        let new_liquidator = deps.api.addr_validate(new_liquidator.trim())?;
+        contract.liquidator = Some(new_liquidator);
     }
     if let Some(v) = params.max_liquidation_staleness_seconds {
         contract.max_liquidation_staleness_seconds = v;

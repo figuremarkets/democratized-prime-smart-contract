@@ -1,4 +1,6 @@
-use crate::constants::{ATTRIBUTE_CUSTODIAN, CONTRACT_NAME, CONTRACT_VERSION};
+use crate::constants::{
+    ATTRIBUTE_CUSTODIAN, ATTRIBUTE_LIQUIDATOR, CONTRACT_NAME, CONTRACT_VERSION,
+};
 use crate::execute::{
     add_collateral, borrow, eliminate_deficit, execute_withdraw, lend, liquidate, receive,
     remove_collateral, repay, set_borrower_required_attrs, set_lender_require_commit_on_exit,
@@ -118,6 +120,7 @@ pub fn execute(
             commit_market_id,
             bad_debt_loss_allocation,
             custodian,
+            liquidator,
             max_liquidation_staleness_seconds,
             liquidation_access,
         } => update_contract_config(
@@ -135,6 +138,7 @@ pub fn execute(
                 commit_market_id,
                 bad_debt_loss_allocation,
                 custodian,
+                liquidator,
                 max_liquidation_staleness_seconds,
                 liquidation_access,
             },
@@ -178,16 +182,21 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> Result<Binary, QueryError> 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
     // Check the contract's existing custodian account and enforce one being set if not already done:
-    let custodian_account: Option<Addr> = {
+    let (custodian_account, liquidator_from_msg): (Option<Addr>, Option<Addr>) = {
         let contract_state: ContractStateV1 = get_contract_state_v1(deps.storage)?;
-        match (&contract_state.custodian, &msg.custodian) {
+        let custodian_account = match (&contract_state.custodian, &msg.custodian) {
             // no existing custodian set on the contract and no update provided; return an error
             (None, None) => return Err(illegal_argument(ASSERT_CUSTODIAN_ERR)),
             // contract custodian will be updated to use the given account address:
             (_, Some(addr)) => Some(deps.api.addr_validate(addr.trim())?),
             // contract has an existing custodian, but no update is given; do nothing
             (Some(_), None) => None,
-        }
+        };
+        let liquidator_from_msg = match &msg.liquidator {
+            Some(addr) => Some(deps.api.addr_validate(addr.trim())?),
+            None => None,
+        };
+        (custodian_account, liquidator_from_msg)
     };
 
     let mut response: Response = migrate_contract::<ContractStateV1>(
@@ -206,6 +215,20 @@ pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, Co
         contract_state.custodian = Some(custodian_account.to_owned());
         set_contract_state_v1(deps.storage, &contract_state)?;
         response = response.add_attribute(ATTRIBUTE_CUSTODIAN, custodian_account.to_string());
+    }
+
+    let mut contract_state = get_contract_state_v1(deps.storage)?;
+    if let Some(liquidator) = liquidator_from_msg {
+        contract_state.liquidator = Some(liquidator.clone());
+        set_contract_state_v1(deps.storage, &contract_state)?;
+        response = response.add_attribute(ATTRIBUTE_LIQUIDATOR, liquidator);
+    } else if contract_state.liquidator.is_none() {
+        let owner = get_ownership(deps.storage)?
+            .owner
+            .ok_or_else(|| illegal_state("contract owner not set after migration"))?;
+        contract_state.liquidator = Some(owner.clone());
+        set_contract_state_v1(deps.storage, &contract_state)?;
+        response = response.add_attribute(ATTRIBUTE_LIQUIDATOR, owner);
     }
 
     Ok(response)

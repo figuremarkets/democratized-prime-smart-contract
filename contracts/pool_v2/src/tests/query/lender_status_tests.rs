@@ -45,6 +45,7 @@ fn get_lender_status_after_set_require_commit_true() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");

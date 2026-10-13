@@ -15,7 +15,7 @@ use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_reserve_state_v1;
-use crate::tests::query::common::{CUSTODIAN, OWNER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::reserve_invariant::{
     assert_assets_liabilities_tie_out, assert_assets_liabilities_tie_out_with_tolerance,
 };
@@ -82,6 +82,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -541,6 +542,7 @@ fn withdraw_fails_when_require_commit_on_exit_and_commit_funds_not_true() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -601,6 +603,7 @@ fn withdraw_exact_fails_when_require_commit_on_exit_and_commit_funds_not_true() 
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -657,6 +660,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");
@@ -1320,6 +1324,7 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
             commit_market_id: Some(1),
             bad_debt_loss_allocation: Default::default(),
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("set commit_market_id");

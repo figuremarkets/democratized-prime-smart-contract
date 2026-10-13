@@ -1,4 +1,4 @@
-//! Tests for Liquidate execute: auth follows liquidation_access (default owner-only;
+//! Tests for Liquidate execute: auth follows liquidation_access (default liquidator-only;
 //! permissionless still requires the owner when unpriceable collateral is load-bearing),
 //! borrower must be liquidatable, the post-state must land at or below margin_rate (no
 //! precomputed minimum repay), 2% collateral bonus.
@@ -8,7 +8,7 @@ use crate::constants::{
     ATTRIBUTE_LIQUIDATION_ACCESS, ATTRIBUTE_SCALED_AMOUNT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
 };
 use crate::contract::execute;
-use crate::execute::liquidate::{ACTION, ASSERT_OWNER_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
+use crate::execute::liquidate::{ACTION, ASSERT_LIQUIDATOR_ERR, ASSERT_OWNER_UNPRICEABLE_ERR};
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::health::BorrowerHealthV1;
@@ -22,7 +22,7 @@ use crate::storage::{
     get_total_collateral_by_asset, set_reserve_state_v1,
 };
 use crate::tests::fixtures::{oracle_price_expired_for, stale_oracle_price};
-use crate::tests::query::common::{CUSTODIAN, OWNER};
+use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
 use crate::utils::{
@@ -115,6 +115,7 @@ fn default_instantiate_msg() -> InstantiateMsg {
         commit_market_id: None,
         bad_debt_loss_allocation: Default::default(),
         custodian: CUSTODIAN.to_owned(),
+        liquidator: LIQUIDATOR.to_owned(),
         liquidation_access: Default::default(),
     }
 }
@@ -331,7 +332,7 @@ fn liquidate_rejects_amount_that_does_not_reduce_scaled_debt() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
@@ -377,7 +378,7 @@ fn liquidate_non_owner_fails() {
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
     ));
 }
 
@@ -402,7 +403,59 @@ fn liquidate_for_custodian_fails() {
 
     assert!(matches!(
         err,
-        ContractError::NotAuthorizedError { message } if message == ASSERT_OWNER_ERR
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
+    ));
+}
+
+#[test]
+fn liquidate_restricted_configured_liquidator_succeeds_owner_and_unrelated_fail() {
+    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+    let min_repay = 374u128;
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .expect("configured liquidator may liquidate when access is restricted");
+
+    let (mut deps, env, _debt, _) = setup_liquidatable_borrower();
+
+    let owner_err = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        owner_err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
+    ));
+
+    let unrelated_err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(OTHER), &[coin(min_repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: collateral_to_seize_success(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        unrelated_err,
+        ContractError::NotAuthorizedError { message } if message == ASSERT_LIQUIDATOR_ERR
     ));
 }
 
@@ -430,9 +483,10 @@ fn set_liquidation_access(
                 LiquidationAccess::Permissionless => {
                     Some(BadDebtLossAllocation::ImmediateLiquidityIndexHaircut)
                 }
-                LiquidationAccess::OwnerOnly => None,
+                LiquidationAccess::LiquidatorOnly => None,
             },
             custodian: None,
+            liquidator: None,
         },
     )
     .expect("custodian can set liquidation_access");
@@ -662,7 +716,10 @@ fn liquidate_succeeds_when_lending_denom_price_is_stale() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
@@ -755,7 +812,10 @@ fn liquidate_succeeds_when_one_collateral_price_is_stale() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
@@ -783,7 +843,10 @@ fn liquidate_succeeds_when_one_collateral_price_is_missing() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
@@ -816,7 +879,10 @@ fn liquidate_fails_when_seizing_unpriceable_collateral() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
@@ -853,7 +919,10 @@ fn liquidate_fails_when_seizing_zero_price_collateral() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
@@ -883,7 +952,10 @@ fn liquidate_succeeds_when_seizing_stale_collateral() {
     execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
@@ -920,7 +992,10 @@ fn liquidate_fails_when_seizing_collateral_beyond_staleness_bound() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(min_repay, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(min_repay, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
@@ -939,8 +1014,9 @@ fn liquidate_fails_when_seizing_collateral_beyond_staleness_bound() {
 
 #[test]
 /// Naming an unpriceable denom in the seize is still banned, including when it is the only
-/// holding. The owner resolves that position with an empty seize instead (see the
-/// all-unpriceable write-off tests).
+/// holding. Under default liquidator-only access the liquidator resolves that position with
+/// an empty seize instead; permissionless still requires the owner (see the all-unpriceable
+/// write-off tests).
 fn liquidate_fails_when_all_collateral_has_no_stored_price() {
     let (mut deps, env) = setup_only_unreliable_borrower();
     drop_unreliable_feed(&mut deps, &env, false);
@@ -948,7 +1024,7 @@ fn liquidate_fails_when_all_collateral_has_no_stored_price() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(UNRELIABLE_COLLATERAL, 1000),
@@ -991,7 +1067,7 @@ fn liquidate_borrower_with_no_debt_fails() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(100, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(100, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
@@ -1049,7 +1125,7 @@ fn liquidate_healthy_borrower_fails() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(100, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(100, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
@@ -1079,7 +1155,7 @@ fn liquidate_repay_too_small_to_restore_health_fails() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(100, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(100, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
@@ -1124,7 +1200,7 @@ fn liquidate_to_margin_rate_succeeds_without_over_liquidating() {
         deps.as_mut(),
         env.clone(),
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(repay_amount, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -1182,7 +1258,7 @@ fn liquidate_to_margin_rate_succeeds_without_over_liquidating() {
 }
 
 #[test]
-fn liquidate_succeeds_and_sends_collateral_to_owner() {
+fn liquidate_succeeds_and_sends_collateral_to_liquidator() {
     let (mut deps, env, _debt, collateral_amount) = setup_liquidatable_borrower();
     let scaled_before = get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap();
 
@@ -1194,7 +1270,7 @@ fn liquidate_succeeds_and_sends_collateral_to_owner() {
         deps.as_mut(),
         env.clone(),
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(repay_amount, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -1205,14 +1281,14 @@ fn liquidate_succeeds_and_sends_collateral_to_owner() {
     .expect("liquidate should succeed");
 
     assert_eq!(res.attributes[0].value, ACTION);
-    assert_eq!(res.attributes[1].value, OWNER);
+    assert_eq!(res.attributes[1].value, LIQUIDATOR);
     assert_eq!(res.attributes[2].value, BORROWER);
     assert_eq!(res.attributes[3].value, repay_amount.to_string());
 
     assert_eq!(res.messages.len(), 1);
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, COLLATERAL_DENOM);
             assert_eq!(
@@ -1277,7 +1353,7 @@ fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
     let res = execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[coin(sent, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(sent, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
@@ -1327,7 +1403,7 @@ fn liquidate_full_close_rejects_floored_payoff_rounding_residue() {
         deps.as_mut(),
         env,
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(floor_payoff, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -1437,7 +1513,7 @@ fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
         deps.as_mut(),
         env,
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(floor_payoff, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -1544,7 +1620,10 @@ fn liquidate_zero_value_remainder_ceiled_payoff_clears_scaled_debt() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(ceil_payoff, LENDING_DENOM)]),
+        message_info(
+            &Addr::unchecked(LIQUIDATOR),
+            &[coin(ceil_payoff, LENDING_DENOM)],
+        ),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 2000),
@@ -1599,7 +1678,7 @@ fn liquidate_excess_repay_refunded() {
     let res = execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[coin(sent, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(sent, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
@@ -1608,7 +1687,7 @@ fn liquidate_excess_repay_refunded() {
     .expect("liquidate should succeed");
 
     assert_eq!(res.attributes[0].value, ACTION);
-    assert_eq!(res.attributes[1].value, OWNER);
+    assert_eq!(res.attributes[1].value, LIQUIDATOR);
     assert_eq!(res.attributes[2].value, BORROWER);
     // Actual repay is capped at debt.
     let actual_repay: u128 = res.attributes[3].value.parse().unwrap();
@@ -1623,7 +1702,7 @@ fn liquidate_excess_repay_refunded() {
     assert_eq!(res.messages.len(), 2);
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, COLLATERAL_DENOM);
             assert_eq!(amount[0].amount.u128(), seize_units);
@@ -1632,7 +1711,7 @@ fn liquidate_excess_repay_refunded() {
     }
     match &res.messages[1].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, LENDING_DENOM);
             assert_eq!(
@@ -1669,7 +1748,7 @@ fn liquidate_insufficient_collateral_value_fails() {
         deps.as_mut(),
         env,
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(repay_amount, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -1702,7 +1781,7 @@ fn liquidate_excess_collateral_value_fails() {
         deps.as_mut(),
         env,
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(repay_amount, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -1733,7 +1812,7 @@ fn liquidate_empty_collateral_to_seize_fails() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(374, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(374, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: empty,
@@ -1760,7 +1839,7 @@ fn liquidate_no_funds_fails() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
@@ -1783,7 +1862,7 @@ fn liquidate_repay_amount_zero_fails() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(0, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(0, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
@@ -1862,7 +1941,7 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
     let res = execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[coin(650, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(650, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: all_collateral,
@@ -1902,7 +1981,7 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
     let second_err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(50, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(50, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: dummy_seize,
@@ -1993,7 +2072,7 @@ fn liquidate_bad_debt_writeoff_uses_ceiled_residual() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(repay, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(repay, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -2087,7 +2166,7 @@ fn liquidate_zero_value_remainder_books_bad_debt() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(650, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(650, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -2134,7 +2213,7 @@ fn liquidate_zero_value_remainder_books_bad_debt() {
     );
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(
                 amount,
                 &vec![coin(1000, COLLATERAL_DENOM), coin(1, UNRELIABLE_COLLATERAL),]
@@ -2219,7 +2298,7 @@ fn liquidate_worthless_priceable_remainder_books_bad_debt() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(99, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(99, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount - 1),
@@ -2267,7 +2346,7 @@ fn liquidate_worthless_priceable_remainder_books_bad_debt() {
     );
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount, &vec![coin(wei_amount, WEI_COLLATERAL)]);
         }
         _ => panic!("expected collateral BankMsg"),
@@ -2352,7 +2431,7 @@ fn liquidate_full_repay_with_unpriceable_remainder_does_not_book_bad_debt() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(700, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(700, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -2457,7 +2536,7 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(650, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(650, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: all_collateral,
@@ -2500,7 +2579,7 @@ fn liquidate_full_close_priced_dust_books_deficit() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -2553,7 +2632,7 @@ fn liquidate_full_close_priced_dust_immediate_haircut() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -2611,7 +2690,7 @@ fn liquidate_full_close_valuable_bag_rejected_by_bonus_cap() {
         deps.as_mut(),
         env,
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(repay_amount, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -2644,7 +2723,7 @@ fn liquidate_partial_seizure_still_requires_100_percent_floor() {
         deps.as_mut(),
         env,
         message_info(
-            &Addr::unchecked(OWNER),
+            &Addr::unchecked(LIQUIDATOR),
             &[coin(repay_amount, LENDING_DENOM)],
         ),
         ExecuteMsg::Liquidate {
@@ -2722,7 +2801,7 @@ fn liquidate_full_close_with_full_debt_repayment_books_no_deficit() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(700, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(700, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -2809,7 +2888,7 @@ fn liquidate_full_close_18_decimal_cheap_display_rejected_by_bonus_cap() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount),
@@ -2939,7 +3018,7 @@ fn assert_all_unreliable_swept(
     );
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount, &vec![coin(1000, UNRELIABLE_COLLATERAL)]);
         }
         _ => panic!("expected collateral BankMsg"),
@@ -2954,13 +3033,13 @@ fn liquidate_owner_resolves_all_unpriceable_missing_feed() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
         },
     )
-    .expect("owner empty seize writes off an all-unpriceable position");
+    .expect("liquidator empty seize writes off an all-unpriceable position");
 
     assert_all_unreliable_swept(&deps, &res);
 }
@@ -2973,18 +3052,18 @@ fn liquidate_owner_resolves_all_unpriceable_expired_last_known() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(1, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(1, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
         },
     )
-    .expect("owner empty seize writes off an expired-only position");
+    .expect("liquidator empty seize writes off an expired-only position");
 
     assert_all_unreliable_swept(&deps, &res);
 }
 
-/// Full repay is not a write-off. The owner can pay an all-unpriceable position off with an
+/// Full repay is not a write-off. The liquidator can pay an all-unpriceable position off with an
 /// empty seize: no collateral moves, and an overpay is only the lending refund.
 #[test]
 fn liquidate_owner_full_repay_all_unpriceable_sends_no_collateral() {
@@ -2997,18 +3076,18 @@ fn liquidate_owner_full_repay_all_unpriceable_sends_no_collateral() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(601, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(601, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
         },
     )
-    .expect("owner full repay of an all-unpriceable position");
+    .expect("liquidator full repay of an all-unpriceable position");
 
     assert_eq!(res.messages.len(), 1);
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount, &vec![coin(1, LENDING_DENOM)]);
         }
         other => panic!("expected only the excess refund, got {:?}", other),
@@ -3383,7 +3462,7 @@ fn liquidate_zero_quote_remainder_is_swept() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(650, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(650, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3603,7 +3682,7 @@ fn liquidate_rejects_writeoff_when_priced_collateral_covers_payoff() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(981, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(981, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3649,7 +3728,7 @@ fn assert_covered_partial_stays_healthy(
     let res = execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[coin(repay, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(repay, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, seize),
@@ -3760,7 +3839,7 @@ fn liquidate_full_payoff_closes_when_priced_collateral_covers_debt() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(990, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(990, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3788,7 +3867,7 @@ fn liquidate_full_payoff_closes_when_priced_collateral_covers_debt() {
     );
     match &res.messages[0].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), OWNER);
+            assert_eq!(to_address.as_str(), LIQUIDATOR);
             assert_eq!(amount, &vec![coin(1000, COLLATERAL_DENOM)]);
         }
         _ => panic!("expected collateral BankMsg"),
@@ -3804,7 +3883,7 @@ fn liquidate_insolvent_priced_collateral_still_books_bad_debt() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(883, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(883, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3839,7 +3918,7 @@ fn liquidate_rejects_short_repay_when_priced_market_equals_payoff() {
     let err = execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[coin(971, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(971, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3861,7 +3940,7 @@ fn liquidate_rejects_short_repay_when_priced_market_equals_payoff() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(990, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(990, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3944,7 +4023,7 @@ fn liquidate_covered_priced_side_keeps_unpriceable_remainder() {
     let err = execute(
         deps.as_mut(),
         env.clone(),
-        message_info(&Addr::unchecked(OWNER), &[coin(981, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(981, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -3974,7 +4053,7 @@ fn liquidate_covered_priced_side_keeps_unpriceable_remainder() {
     let res = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(990, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(990, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
@@ -4065,7 +4144,7 @@ fn liquidate_sums_priced_market_value_across_assets() {
     let err = execute(
         deps.as_mut(),
         env,
-        message_info(&Addr::unchecked(OWNER), &[coin(981, LENDING_DENOM)]),
+        message_info(&Addr::unchecked(LIQUIDATOR), &[coin(981, LENDING_DENOM)]),
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_both,
