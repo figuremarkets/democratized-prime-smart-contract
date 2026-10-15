@@ -1,5 +1,6 @@
 mod add_collateral_tests;
 mod borrow_tests;
+mod directed_sale_tests;
 mod eliminate_deficit_tests;
 mod execute_msg_json_tests;
 mod lend_rounding_audit_regression;

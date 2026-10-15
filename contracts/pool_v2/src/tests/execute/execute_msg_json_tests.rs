@@ -5,7 +5,7 @@ use crate::model::{CollateralAssetV1, OperationalState, RateParamsV1};
 use crate::msg::execute::{Cw20ReceivePayload, EliminateDeficitFunding};
 use crate::msg::ExecuteMsg;
 use crate::tests::query::common::CUSTODIAN;
-use cosmwasm_std::{to_json_binary, Binary, Decimal256, Uint128};
+use cosmwasm_std::{to_json_binary, Binary, Decimal256, Int128, Timestamp, Uint128};
 use cw20::Cw20ReceiveMsg;
 use cw_ownable::Action;
 use std::collections::BTreeMap;
@@ -108,6 +108,46 @@ fn remove_collateral_json_deserializes() {
     assert_json_deserializes(
         r#"{"remove_collateral":{"to_remove":{"asset.one":"100"}}}"#,
         ExecuteMsg::RemoveCollateral { to_remove },
+    );
+}
+
+#[test]
+fn adjust_directed_collateral_sale_json_deserializes() {
+    let mut adjustments = BTreeMap::new();
+    adjustments.insert("nbtc.figure.se".to_string(), Int128::from(455i128));
+    assert_json_deserializes(
+        r#"{"adjust_directed_collateral_sale":{"adjustments":{"nbtc.figure.se":"455"},"expires_at":"1700000000000000000","version":1}}"#,
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments,
+            expires_at: Timestamp::from_nanos(1_700_000_000_000_000_000),
+            version: 1,
+        },
+    );
+}
+
+#[test]
+fn cancel_directed_collateral_sale_json_deserializes() {
+    assert_json_deserializes(
+        r#"{"adjust_directed_collateral_sale":{"adjustments":{},"expires_at":"0","version":2}}"#,
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments: BTreeMap::new(),
+            expires_at: Timestamp::from_nanos(0),
+            version: 2,
+        },
+    );
+}
+
+#[test]
+fn decrease_directed_collateral_sale_json_deserializes() {
+    let mut adjustments = BTreeMap::new();
+    adjustments.insert("nbtc.figure.se".to_string(), Int128::from(-50i128));
+    assert_json_deserializes(
+        r#"{"adjust_directed_collateral_sale":{"adjustments":{"nbtc.figure.se":"-50"},"expires_at":"0","version":3}}"#,
+        ExecuteMsg::AdjustDirectedCollateralSale {
+            adjustments,
+            expires_at: Timestamp::from_nanos(0),
+            version: 3,
+        },
     );
 }
 
