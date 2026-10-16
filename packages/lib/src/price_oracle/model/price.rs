@@ -468,8 +468,7 @@ mod tests {
         }
     }
 
-    /// Production assets are 6 and 9 decimals, where the defect is unreachable. Quotes there
-    /// must be unchanged from the superseded two-step form.
+    /// Quotes for 6- and 9-decimal assets are unchanged from the superseded two-step form.
     #[test]
     fn amount_from_usd_haircutted_is_unchanged_for_six_and_nine_decimal_assets() {
         let haircut = dec("0.8");
