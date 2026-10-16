@@ -254,7 +254,7 @@ From the transaction result, note the **contract address** of the new CW20 → `
 
 ### Path A — Step A2: Instantiate `pool_v2`
 
-**Instantiate message (JSON):** use `repo_token.existing` with the CW20 address from Step A1. **Lending token/denom** can be anything (YLDS, USD, wrapped BTC/ETH, etc.); set `lending_denom` to that asset’s denom and precision. Example below uses YLDS (`uylds.fcc`, 6 decimals). The pool’s message uses shortened field names for some nested types (e.g. lending denom `"n"` / `"p"`, rate params `"tr"`, `"minr"`, etc.).
+**Instantiate message (JSON):** use `repo_token.existing` with the CW20 address from Step A1. **Lending token/denom** can be anything (YLDS, USD, wrapped BTC/ETH, etc.); set `lending_denom` to that asset’s denom and precision. Example below uses YLDS (`uylds.fcc`, 6 decimals). The pool’s message uses shortened field names for some nested types (e.g. lending denom `"n"` / `"p"`, rate params `"tr"`, `"minr"`, etc.). `rate_params.spy` is optional and fixed at `31536000`. Omit it or send that value. Responses still include `spy`.
 
 ```json
 {

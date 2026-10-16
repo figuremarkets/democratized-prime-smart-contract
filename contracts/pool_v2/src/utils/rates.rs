@@ -10,7 +10,8 @@
 //! break the `(1-rf)` split and reserve accrual.
 //! Protocol fee APR: `protocol_fee_rate` is `borrower_rate * reserve_factor` (reserve-factor mode)
 //! or `flat_fee_apr` (flat-spread mode); booked as `floor(total_borrow * fee_apr * dt / year)`.
-//! Index growth: `new_index = old_index * (1 + rate * elapsed_seconds / seconds_per_year)` (linear in time).
+//! Index growth: `new_index = old_index * (1 + rate * elapsed_seconds / SECONDS_PER_YEAR)` (linear in time).
+//! `SECONDS_PER_YEAR` is the fixed 365-day year (31_536_000). Accrual does not read the stored field.
 //!
 //! **Borrow vs liquidity index:** Both the lent-supply (liquidity) index and the borrow index use this same
 //! linear factor. Some designs compound the borrow index as `(1+r)^t`; here both indices use `(1 + r*t)`,
@@ -29,11 +30,11 @@
 //!   the Liquidate bad-debt write-off of leftover scaled, so collected coins / booked loss cover
 //!   aggregate `floor((Σ s) · bi)`. Quotes and LTV stay floored.
 //! - **Protocol fee (floor)** when booking `accrued_reserve`: `floor(pre-accrual total_borrow ×
-//!   protocol_fee_rate × elapsed / seconds_per_year)`. Sub-unit fees stay with lenders. Do not
+//!   protocol_fee_rate × elapsed / SECONDS_PER_YEAR)`. Sub-unit fees stay with lenders. Do not
 //!   derive this as a difference of independently floored borrower and lender totals.
 
 use crate::model::error::{illegal_state, ContractError};
-use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1};
+use crate::model::{FeeModelV1, RateParamsV1, ReserveStateV1, SECONDS_PER_YEAR};
 use crate::storage::{get_reserve_state_v1, set_reserve_state_v1};
 use cosmwasm_std::{ensure, Decimal256, Env, Storage, Timestamp, Uint128, Uint256};
 use result_extensions::ResultExtensions;
@@ -168,8 +169,8 @@ pub fn compute_effective_reserve(
     let borrower_rate = borrower_rate_from_utilization(params, utilization)?;
     let lender_rate = lender_rate_from_utilization(params, utilization, borrower_rate)?;
 
-    let li_factor = index_growth_factor(lender_rate, elapsed, params.seconds_per_year)?;
-    let bi_factor = index_growth_factor(borrower_rate, elapsed, params.seconds_per_year)?;
+    let li_factor = index_growth_factor(lender_rate, elapsed, SECONDS_PER_YEAR)?;
+    let bi_factor = index_growth_factor(borrower_rate, elapsed, SECONDS_PER_YEAR)?;
 
     let new_li = reserve.liquidity_index.checked_mul(li_factor)?;
     let new_bi = reserve.borrow_index.checked_mul(bi_factor)?;
@@ -179,16 +180,14 @@ pub fn compute_effective_reserve(
     reserve.last_updated_at = as_of_time;
 
     // Compute the protocol share directly from the borrow side:
-    // fee = total_borrow_before * protocol_fee_rate * elapsed / seconds_per_year.
+    // fee = total_borrow_before * protocol_fee_rate * elapsed / SECONDS_PER_YEAR.
     //
     // This is one non-negative term, not a difference of independently floored borrower and
     // lender totals. Flooring deliberately under-books the protocol and leaves sub-unit dust
     // with lenders. Do not derive this from the difference between the two indexes; doing so
     // recreates the accrued-reserve ratchet this direct formula prevents.
-    let time_fraction = Decimal256::from_ratio(
-        Uint128::from(elapsed),
-        Uint128::from(params.seconds_per_year),
-    );
+    let time_fraction =
+        Decimal256::from_ratio(Uint128::from(elapsed), Uint128::from(SECONDS_PER_YEAR));
     let fee = total_borrow_before
         .checked_mul(protocol_fee_rate(params, borrower_rate)?)?
         .checked_mul(time_fraction)?;
