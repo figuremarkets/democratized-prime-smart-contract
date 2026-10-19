@@ -191,6 +191,13 @@ pub struct CollateralRequirementsResponseV1 {
     pub unpriceable_collateral: Vec<String>,
 }
 
+/// Response for the GetBorrowerStatus query.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct BorrowerStatusResponseV1 {
+    /// When true, this borrower is marked require-commit.
+    pub require_commit: bool,
+}
+
 /// Response for the GetLenderStatus query. Supply balance comes from repo_token_cw20 Balance (and TokenInfo) query.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct LenderStatusResponseV1 {

@@ -9,10 +9,13 @@ use crate::instantiate::instantiate_contract;
 use crate::model::{BorrowerCollateralV1, CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{get_reserve_state_v1, get_scaled_borrow, set_borrower_collateral};
+use crate::tests::assertions::assert_commit_matches;
+use crate::tests::execute::{mark_borrower_require_commit, set_commit_market_id};
 use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
+use crate::tests::response_attrs::decode_commit;
 use crate::utils::scaled_to_underlying_liquidity;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -30,7 +33,8 @@ use provwasm_std::types::provenance::attribute::v1::{
 use std::collections::HashMap;
 use std::str::FromStr;
 
-const BORROWER: &str = "tp1borrower";
+/// Valid Provenance bech32 so SetBorrowerRequireCommit addr_validate accepts this borrower.
+const BORROWER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 const LENDING_DENOM: &str = "uylds.fcc";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -647,4 +651,83 @@ fn borrow_succeeds_when_wildcard_borrower_attr_matches() {
         },
     )
     .expect("borrow should succeed with wildcard borrower attr");
+}
+
+#[test]
+fn borrow_marked_borrower_sends_then_commits() {
+    let (mut deps, env) = setup_borrow_ready();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+    let amount = Uint128::new(10_000_000);
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow { amount },
+    )
+    .expect("borrow should succeed");
+
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send {
+            to_address,
+            amount: coins,
+        }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(coins.as_slice(), &[coin(amount.u128(), LENDING_DENOM)]);
+        }
+        other => panic!("expected Bank::Send first, got {:?}", other),
+    }
+    let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
+    assert_commit_matches(&commit, BORROWER, &[coin(amount.u128(), LENDING_DENOM)]);
+}
+
+#[test]
+fn borrow_marked_zero_amount_emits_no_commit() {
+    let (mut deps, env) = setup_borrow_ready();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::zero(),
+        },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("Borrow amount must be positive"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn borrow_unmarked_borrower_does_not_commit() {
+    let (mut deps, env) = setup_borrow_ready();
+    set_commit_market_id(&mut deps, &env);
+    let amount = Uint128::new(10_000_000);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow { amount },
+    )
+    .expect("borrow should succeed");
+
+    assert_eq!(res.messages.len(), 1);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send {
+            to_address,
+            amount: coins,
+        }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(coins.as_slice(), &[coin(amount.u128(), LENDING_DENOM)]);
+        }
+        other => panic!("expected Bank::Send, got {:?}", other),
+    }
 }

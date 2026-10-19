@@ -166,6 +166,13 @@ pub enum ExecuteMsg {
     /// Update interest rate params (contract owner only). Full replacement; validated same as at instantiate.
     UpdateRateParams { rate_params: RateParamsV1 },
 
+    /// Per-borrower require-commit (contract owner only). `Some(true)` marks the address,
+    /// `Some(false)` stores false, and `None` clears the entry. Enabling requires `commit_market_id`.
+    SetBorrowerRequireCommit {
+        address: String,
+        require: Option<bool>,
+    },
+
     /// Per-address "require commit on exit" for lenders (contract owner only). When set to true for an address,
     /// that lender must pass commit_funds: true in Withdraw/WithdrawExact payloads. None = remove override.
     SetLenderRequireCommitOnExit {

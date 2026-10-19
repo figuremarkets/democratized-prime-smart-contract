@@ -8,6 +8,7 @@ pub const MAX_LENDER_BORROWER_REQUIRED_ATTRS: usize = 10;
 
 /// `SubMsg` reply id for instantiating the repo token CW20 from pool `instantiate`.
 pub const REPO_TOKEN_INSTANTIATE_REPLY_ID: u64 = 1;
+pub const ATTRIBUTE_ADDRESS: &str = "address";
 pub const ATTRIBUTE_AMOUNT: &str = "amount";
 pub const ATTRIBUTE_BORROWER: &str = "borrower";
 pub const ATTRIBUTE_BORROWER_REQUIRED_ATTRS_JSON: &str = "borrower_required_attrs_json";
@@ -39,6 +40,7 @@ pub const ATTRIBUTE_LEND_RATE: &str = "lend_rate";
 pub const ATTRIBUTE_LIQUIDITY_INDEX: &str = "liquidity_index";
 pub const ATTRIBUTE_UTILIZATION: &str = "utilization";
 pub const ATTRIBUTE_RECIPIENT: &str = "recipient";
+pub const ATTRIBUTE_REQUIRED: &str = "required";
 pub const ATTRIBUTE_SENDER: &str = "sender";
 pub const ATTRIBUTE_SCALED_AMOUNT: &str = "scaled_amount";
 /// Value is JSON array of asset ids. Uses `_json` suffix for JSON payloads.

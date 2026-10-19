@@ -11,9 +11,12 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_borrower_collateral;
+use crate::tests::assertions::assert_commit_matches;
+use crate::tests::execute::{mark_borrower_require_commit, set_commit_market_id};
 use crate::tests::fixtures::{fresh_oracle_price, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
+use crate::tests::response_attrs::decode_commit;
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
     coin, from_json, to_json_binary, Addr, BankMsg, ContractResult, CosmosMsg, Decimal256,
@@ -26,7 +29,8 @@ use provwasm_mocks::mock_provenance_dependencies;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
-const BORROWER: &str = "tp1borrower";
+/// Valid Provenance bech32 so SetBorrowerRequireCommit addr_validate accepts this borrower.
+const BORROWER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
 /// "u" prefix => 1 ylds.fcc = 10^6 uylds.fcc.
@@ -574,5 +578,140 @@ fn remove_collateral_fails_when_lending_denom_price_is_zero() {
             assert!(message.contains("Lending denom price is zero"));
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn remove_collateral_marked_sends_then_commits() {
+    let (mut deps, env) = setup_collateral_no_debt();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+    let to_remove = BTreeMap::from([(COLLATERAL_BTC.to_string(), Uint128::new(20))]);
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral {
+            to_remove: to_remove.clone(),
+        },
+    )
+    .expect("remove_collateral should succeed");
+
+    let sent = vec![coin(20, COLLATERAL_BTC)];
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(amount, &sent);
+        }
+        other => panic!("expected Bank::Send first, got {:?}", other),
+    }
+    let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
+    assert_commit_matches(&commit, BORROWER, &sent);
+}
+
+#[test]
+fn remove_collateral_marked_multi_denom_commits_all() {
+    let (mut deps, env) = setup_collateral_no_debt();
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    prices.insert(COLLATERAL_ETH.to_string(), price_entry("2000"));
+    set_oracle_prices(&mut deps.querier, prices);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(10, COLLATERAL_ETH)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add eth collateral");
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+
+    let to_remove = BTreeMap::from([
+        (COLLATERAL_BTC.to_string(), Uint128::new(15)),
+        (COLLATERAL_ETH.to_string(), Uint128::new(4)),
+    ]);
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral { to_remove },
+    )
+    .expect("remove_collateral should succeed");
+
+    let sent = vec![coin(15, COLLATERAL_BTC), coin(4, COLLATERAL_ETH)];
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(amount, &sent);
+        }
+        other => panic!("expected Bank::Send first, got {:?}", other),
+    }
+    let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
+    assert_commit_matches(&commit, BORROWER, &sent);
+}
+
+#[test]
+fn remove_collateral_marked_with_zero_entry_emits_no_commit() {
+    let (mut deps, env) = setup_collateral_no_debt();
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(COLLATERAL_BTC.to_string(), price_entry(BTC_PRICE_USD));
+    prices.insert(COLLATERAL_ETH.to_string(), price_entry("2000"));
+    set_oracle_prices(&mut deps.querier, prices);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(10, COLLATERAL_ETH)]),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add eth collateral");
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+
+    let to_remove = BTreeMap::from([
+        (COLLATERAL_BTC.to_string(), Uint128::new(15)),
+        (COLLATERAL_ETH.to_string(), Uint128::zero()),
+    ]);
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral { to_remove },
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("must be positive"), "message: {}", message);
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+    let collateral = get_borrower_collateral(deps.as_ref().storage, BORROWER).unwrap();
+    assert_eq!(collateral.amounts.get(COLLATERAL_BTC), Some(&250));
+    assert_eq!(collateral.amounts.get(COLLATERAL_ETH), Some(&10));
+}
+
+#[test]
+fn remove_collateral_unmarked_does_not_commit() {
+    let (mut deps, env) = setup_collateral_no_debt();
+    set_commit_market_id(&mut deps, &env);
+    let to_remove = BTreeMap::from([(COLLATERAL_BTC.to_string(), Uint128::new(20))]);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral { to_remove },
+    )
+    .expect("remove_collateral should succeed");
+
+    assert_eq!(res.messages.len(), 1);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(amount.as_slice(), &[coin(20, COLLATERAL_BTC)]);
+        }
+        other => panic!("expected Bank::Send, got {:?}", other),
     }
 }

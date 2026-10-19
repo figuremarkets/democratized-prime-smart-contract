@@ -1,3 +1,4 @@
+pub mod borrower_require_commit;
 pub mod collateral;
 pub mod contract_state;
 pub mod directed_sale;
@@ -5,6 +6,10 @@ pub mod lender_require_commit;
 pub mod reserve;
 pub mod scaled_borrow;
 
+pub use borrower_require_commit::{
+    get_borrower_require_commit_on_exit, remove_borrower_require_commit_on_exit,
+    set_borrower_require_commit_on_exit,
+};
 pub use collateral::{
     add_total_collateral, get_borrower_collateral, get_total_collateral_by_asset,
     is_collateral_asset_in_use, set_borrower_collateral, subtract_total_collateral,

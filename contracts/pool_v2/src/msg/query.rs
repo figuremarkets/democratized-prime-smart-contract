@@ -1,6 +1,7 @@
 use crate::model::{
-    query::LenderStatusResponseV1, BorrowerPositionResponseV1, CollateralRequirementsResponseV1,
-    ReserveResponseV1, StateResponseV1,
+    query::{BorrowerStatusResponseV1, LenderStatusResponseV1},
+    BorrowerPositionResponseV1, CollateralRequirementsResponseV1, ReserveResponseV1,
+    StateResponseV1,
 };
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
@@ -34,6 +35,9 @@ pub enum QueryMsg {
         new_loan_amount: Uint128,
         collateral_assets: Vec<String>,
     },
+    /// Borrower status: whether this address is marked require-commit.
+    #[returns(BorrowerStatusResponseV1)]
+    GetBorrowerStatus { address: String },
     /// Lender status: whether this address must pass commit_funds when withdrawing (per-address require commit on exit).
     /// Underlying lent position comes from the repo_token_cw20 **Balance** query, not this contract.
     #[returns(LenderStatusResponseV1)]

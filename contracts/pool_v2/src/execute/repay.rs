@@ -3,13 +3,19 @@ use crate::constants::{
 };
 use crate::model::error::{illegal_argument, illegal_state, ContractError};
 use crate::storage::{
-    get_contract_state_v1, get_scaled_borrow, set_reserve_state_v1, set_scaled_borrow,
+    get_borrower_require_commit_on_exit, get_contract_state_v1, get_scaled_borrow,
+    set_reserve_state_v1, set_scaled_borrow,
 };
 use crate::utils::{
     scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow, update_reserve_indexes,
     validate_single_coin_denom, WithRates,
 };
-use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
+use cosmwasm_std::{
+    ensure, BankMsg, Coin, CosmosMsg, DepsMut, Empty, Env, MessageInfo, Response, Uint128,
+};
+use provwasm_std::types::cosmos::authz::v1beta1::MsgExec;
+use provwasm_std::types::cosmos::base::v1beta1::Coin as ProvCoin;
+use provwasm_std::types::provenance::exchange::v1::MsgCommitFundsRequest;
 
 pub const ACTION: &str = "repay";
 
@@ -21,6 +27,8 @@ pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Con
     let amount = amount.u128();
 
     let mut reserve = update_reserve_indexes(deps.storage, &env, &contract.rate_params)?;
+
+    let commit_funds: bool = get_borrower_require_commit_on_exit(deps.storage, &info.sender)?;
 
     let scaled_debt = get_scaled_borrow(deps.storage, info.sender.as_str())?;
     ensure!(scaled_debt > 0, illegal_argument("No borrow to repay"));
@@ -70,6 +78,30 @@ pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Con
                 amount: Uint128::from(excess),
             }],
         });
+
+        if commit_funds {
+            let market_id = contract.commit_market_id.ok_or_else(|| {
+                illegal_argument("commit_market_id is not configured on the contract")
+            })?;
+            let funds: Vec<ProvCoin> = vec![contract.lending_denom.to_prov_coin(excess)];
+            let commit_msg: CosmosMsg<Empty> = MsgExec {
+                grantee: env.contract.address.to_string(),
+                msgs: vec![MsgCommitFundsRequest {
+                    account: info.sender.to_string(),
+                    market_id,
+                    amount: funds,
+                    creation_fee: None,
+                    event_tag: format!(
+                        "demo-prime:{}:{}:repay_refund",
+                        ACTION,
+                        info.sender.as_str()
+                    ),
+                }
+                .to_any()],
+            }
+            .into();
+            res = res.add_message(commit_msg);
+        }
     }
 
     res.attach_rates(&reserve, &contract.rate_params)

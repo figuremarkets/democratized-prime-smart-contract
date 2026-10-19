@@ -9,12 +9,16 @@ use crate::model::error::ContractError;
 use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::{
-    get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow, set_reserve_state_v1,
-    set_scaled_borrow,
+    get_contract_state_v1, get_reserve_state_v1, get_scaled_borrow, set_contract_state_v1,
+    set_reserve_state_v1, set_scaled_borrow,
 };
+use crate::tests::assertions::assert_commit_matches;
+use crate::tests::execute::{mark_borrower_require_commit, set_commit_market_id};
 use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::reserve_invariant::assert_reserve_assets_liabilities_tie_out_with_tolerance;
 use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
+use crate::tests::response_attrs::decode_commit;
+use crate::tests::types::TestDeps;
 use crate::utils::{
     compute_effective_reserve, scaled_to_underlying_borrow, scaled_to_underlying_borrow_ceil,
     scaled_to_underlying_liquidity,
@@ -22,7 +26,7 @@ use crate::utils::{
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
     coin, from_json, to_json_binary, Addr, BankMsg, ContractResult, CosmosMsg, Decimal256,
-    QuerierResult, SystemError, SystemResult, Timestamp, Uint128, WasmQuery,
+    QuerierResult, ReplyOn, SystemError, SystemResult, Timestamp, Uint128, WasmQuery,
 };
 use cosmwasm_std::{Env, MemoryStorage, OwnedDeps};
 use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
@@ -31,7 +35,8 @@ use provwasm_mocks::mock_provenance_dependencies;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-const BORROWER: &str = "tp1borrower";
+/// Valid Provenance bech32 so SetBorrowerRequireCommit addr_validate accepts this borrower.
+const BORROWER: &str = "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu";
 const LENDING_DENOM: &str = "uylds.fcc";
 /// Valid Provenance bech32 so addr_validate passes in instantiate.
 const REPO_TOKEN_CW20: &str = "tp1a07pq74jt05vfmjgk9ksdfkwakzk3cx78xx6sz";
@@ -596,6 +601,213 @@ fn repay_fails_zero_amount() {
     match &err {
         ContractError::IllegalArgumentError { message } => {
             assert!(message.contains("below minimum"));
+        }
+        _ => panic!("expected IllegalArgumentError, got {:?}", err),
+    }
+}
+
+#[test]
+fn repay_marked_overage_refunds_then_commits() {
+    let (mut deps, env, borrow_amount) = setup_borrower_with_debt();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+    let extra = 2_000_000u128;
+    let sent = borrow_amount + extra;
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(sent, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .expect("repay should succeed");
+
+    let applied: u128 = res.attributes[2].value.parse().expect("applied amount");
+    let refund = sent - applied;
+    assert!(refund > 0);
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(amount.as_slice(), &[coin(refund, LENDING_DENOM)]);
+        }
+        other => panic!("expected Bank::Send first, got {:?}", other),
+    }
+    let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
+    assert_commit_matches(&commit, BORROWER, &[coin(refund, LENDING_DENOM)]);
+}
+
+#[test]
+fn repay_marked_exact_emits_no_commit() {
+    let (mut deps, env, borrow_amount) = setup_borrower_with_debt();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(borrow_amount, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("repay should succeed");
+
+    assert!(res.messages.is_empty());
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn repay_marked_partial_emits_no_commit() {
+    let (mut deps, env, _) = setup_borrower_with_debt();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(3_000_000, LENDING_DENOM)],
+        ),
+        ExecuteMsg::Repay {},
+    )
+    .expect("repay should succeed");
+
+    assert!(res.messages.is_empty());
+    assert!(get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap() > 0);
+}
+
+#[test]
+fn repay_unmarked_overage_does_not_commit() {
+    let (mut deps, env, borrow_amount) = setup_borrower_with_debt();
+    set_commit_market_id(&mut deps, &env);
+    let sent = borrow_amount + 2_000_000;
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(sent, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .expect("repay should succeed");
+
+    assert_eq!(res.messages.len(), 1);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(amount.len(), 1);
+            assert_eq!(amount[0].denom, LENDING_DENOM);
+            assert!(amount[0].amount.u128() > 0);
+        }
+        other => panic!("expected Bank::Send, got {:?}", other),
+    }
+}
+
+/// Pins the borrower's scaled debt to 10,000 at borrow_index 1.005 so the ceil payoff is 10,050.
+fn setup_marked_borrower_test_case() -> (TestDeps, Env) {
+    let (mut deps, env, _) = setup_borrower_with_debt();
+    mark_borrower_require_commit(&mut deps, &env, &Addr::unchecked(BORROWER));
+
+    let mut reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    reserve.borrow_index = Decimal256::from_str("1.005").unwrap();
+    reserve.last_updated_at = env.block.time;
+    reserve.total_scaled_borrow = 10_000;
+    set_reserve_state_v1(deps.as_mut().storage, &reserve).unwrap();
+    set_scaled_borrow(deps.as_mut().storage, BORROWER, 10_000).unwrap();
+    assert_eq!(
+        scaled_to_underlying_borrow_ceil(10_000, reserve.borrow_index).unwrap(),
+        10_050
+    );
+
+    (deps, env)
+}
+
+#[test]
+fn repay_marked_overage_worked_example_refunds_then_commits() {
+    let (mut deps, env) = setup_marked_borrower_test_case();
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(11_000, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .expect("repay should succeed");
+
+    assert_eq!(res.attributes[2].key, "amount");
+    assert_eq!(res.attributes[2].value, "10050");
+    assert_eq!(res.attributes[3].key, ATTRIBUTE_SCALED_AMOUNT);
+    assert_eq!(res.attributes[3].value, "10000");
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+
+    assert_eq!(res.messages.len(), 2);
+    match &res.messages[0].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), BORROWER);
+            assert_eq!(amount.as_slice(), &[coin(950, LENDING_DENOM)]);
+        }
+        other => panic!("expected Bank::Send first, got {:?}", other),
+    }
+    let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
+    assert_commit_matches(&commit, BORROWER, &[coin(950, LENDING_DENOM)]);
+
+    // Plain messages: a failing commit (e.g. missing authz grant) aborts the whole transaction.
+    for msg in &res.messages {
+        assert_eq!(msg.reply_on, ReplyOn::Never);
+    }
+}
+
+#[test]
+fn repay_marked_exact_payoff_after_accrual_emits_no_commit() {
+    let (mut deps, env) = setup_marked_borrower_test_case();
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(10_050, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .expect("repay should succeed");
+
+    assert!(res.messages.is_empty());
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn repay_marked_overage_without_commit_market_id_fails() {
+    let (mut deps, env) = setup_marked_borrower_test_case();
+    let mut contract = get_contract_state_v1(deps.as_ref().storage).unwrap();
+    contract.commit_market_id = None;
+    set_contract_state_v1(deps.as_mut().storage, &contract).unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        message_info(&Addr::unchecked(BORROWER), &[coin(11_000, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+    .unwrap_err();
+
+    match &err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(
+                message.contains("commit_market_id is not configured"),
+                "message: {}",
+                message
+            );
         }
         _ => panic!("expected IllegalArgumentError, got {:?}", err),
     }
