@@ -570,7 +570,7 @@ provenanced tx wasm execute $POOL '{"add_collateral":{}}' \
 provenanced query wasm contract-state smart $POOL '{"get_borrower_position":{"address":"'$BORROWER'"}}' --chain-id $CHAIN_ID --testnet -o json
 ```
 
-**4.6 Borrow** (borrower) → verify debt and health. Amount in base units (e.g. 50000000 = 50 YLDS). Borrow is only allowed if the resulting LTV stays below the pool's margin rate (e.g. 80%); the AddCollateral amount above is chosen so this borrow is valid at the doc's oracle prices. Borrowing 50 YLDS against 90 YLDS previously lent into the pool gives ~55% utilization so APR and interest accrual are visible.
+**4.6 Borrow** (borrower) → verify debt and health. Amount in base units (e.g. 50000000 = 50 YLDS). Borrow is only allowed if the resulting LTV stays below the pool's margin rate (e.g. 80%); the AddCollateral amount above is chosen so this borrow is valid at the doc's oracle prices. Borrowing 50 YLDS against 90 YLDS previously lent into the pool gives ~55% utilization so APR and interest accrual are visible. If the borrower has **require_commit** (see 4.11c), the borrowed amount is also committed to the pool's commit market.
 
 ```bash
 provenanced tx wasm execute $POOL '{"borrow":{"amount":"50000000"}}' \
@@ -583,7 +583,7 @@ provenanced tx wasm execute $POOL '{"borrow":{"amount":"50000000"}}' \
 provenanced query wasm contract-state smart $POOL '{"get_borrower_position":{"address":"'$BORROWER'"}}' --chain-id $CHAIN_ID --testnet -o json
 ```
 
-**4.7 Repay** (borrower) → verify debt decreased (e.g. repay 25 YLDS = 25000000). Overpay to fully close (`ceil` of scaled debt; excess is refunded).
+**4.7 Repay** (borrower) → verify debt decreased (e.g. repay 25 YLDS = 25000000). Overpay to fully close (`ceil` of scaled debt; excess is refunded). If the borrower has **require_commit** (see 4.11c), the refunded excess is committed to the commit market.
 
 ```bash
 provenanced tx wasm execute $POOL '{"repay":{}}' \
@@ -597,7 +597,7 @@ provenanced tx wasm execute $POOL '{"repay":{}}' \
 provenanced query wasm contract-state smart $POOL '{"get_borrower_position":{"address":"'$BORROWER'"}}' --chain-id $CHAIN_ID --testnet -o json
 ```
 
-**4.8 RemoveCollateral** → verify position:
+**4.8 RemoveCollateral** → verify position. If the borrower has **require_commit** (see 4.11c), the removed collateral is committed to the commit market:
 
 ```bash
 provenanced tx wasm execute $POOL '{"remove_collateral":{"to_remove":{"'$COLLATERAL_DENOM'":"100000"}}}' \
@@ -731,6 +731,24 @@ provenanced query wasm contract-state smart $POOL '{"get_lender_status":{"addres
 # When require_commit_on_exit is not set, the user can still pass commit_funds: true to opt in to committing to the market.
 ```
 
+**4.11c Optional: Borrower require-commit (SetBorrowerRequireCommit, GetBorrowerStatus)** — Requires **commit_market_id** to be set (see 4.11b). Admin flags a borrower so funds leaving the pool for them are committed to the market; query **GetBorrowerStatus** to see **require_commit**.
+
+| Action | `require_commit` = true | `require_commit` = false / not set |
+|--------|-------------------------|------------------------------------|
+| **Borrow** | Borrowed amount is sent and committed to the market | Borrowed amount is sent |
+| **Repay** | Refunded excess is committed to the market (no excess = no commit) | Excess is refunded |
+| **RemoveCollateral** | Removed coins are sent and committed to the market | Removed coins are sent |
+
+```bash
+# Flag the borrower (fails if commit_market_id not set)
+provenanced tx wasm execute $POOL '{"set_borrower_require_commit":{"address":"'$BORROWER'","require":true}}' \
+  --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
+provenanced query wasm contract-state smart $POOL '{"get_borrower_status":{"address":"'$BORROWER'"}}' --chain-id $CHAIN_ID --testnet -o json
+# Clear the flag ("require":false does the same)
+provenanced tx wasm execute $POOL '{"set_borrower_require_commit":{"address":"'$BORROWER'","require":null}}' \
+  --from admin --chain-id $CHAIN_ID --keyring-backend test --testnet -b sync --gas-prices 1nhash --gas-adjustment 2 -y
+```
+
 **4.12 Admin: Withdraw** (withdraw a lender's supply on their behalf) → lender receives underlying; pool burns their repo token via the repo CW20. Does not check require_commit_on_exit. Optionally pass **`commit_funds: true`** to emit MsgCommitFundsRequest when `commit_market_id` is set. Use when closing a position or offboarding a lender. No `--amount` from admin; the pool sends from its balance to the lender. Use `amount: null` to withdraw the lender's full supply, or `amount: "5000000"` for a partial (e.g. 5 YLDS). After this step the lender's repo balance and pool liquidity decrease.
 
 ```bash
@@ -788,7 +806,7 @@ To test liquidation you would: (a) ensure the borrower has debt and collateral; 
 ## 5. Suggested test order (high level)
 
 1. **Prerequisites and deploy** (sections 1–3): keys, funding, markers, KYC names, oracle prices, then **either** Path A (repo → pool with `repo_token.existing` → UpdateConfig) **or** Path B (single pool instantiate with `repo_token.new`; set **$REPO** from `get_state` if needed). Grant lender.kyc.pb to pool and borrower (so borrower can receive YLDS on Borrow).
-2. **Pool** (section 4): run steps 4.1–4.14 in order; each broadcast is followed by the listed queries. Repo token flows are exercised there; Path A also runs UpdateConfig at **3.1.3**.
+2. **Pool** (section 4): run steps 4.1–4.14 in order (optional steps such as 4.11b and 4.11c can be skipped); each broadcast is followed by the listed queries. Repo token flows are exercised there; Path A also runs UpdateConfig at **3.1.3**.
 
 Replace placeholders (`$POOL`, `$LENDER`, etc.) with real values. Use `--keyring-backend test --testnet` (and `--home build/node0` for localnet) as in the doc.
 

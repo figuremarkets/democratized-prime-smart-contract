@@ -87,6 +87,28 @@
       "additionalProperties": false
     },
     {
+      "description": "Borrower status: whether this address is marked require-commit.",
+      "type": "object",
+      "required": [
+        "get_borrower_status"
+      ],
+      "properties": {
+        "get_borrower_status": {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
       "description": "Lender status: whether this address must pass commit_funds when withdrawing (per-address require commit on exit). Underlying lent position comes from the repo_token_cw20 **Balance** query, not this contract.",
       "type": "object",
       "required": [
