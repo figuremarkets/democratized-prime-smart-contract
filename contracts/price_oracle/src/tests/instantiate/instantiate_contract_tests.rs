@@ -47,7 +47,7 @@ mod unit {
         assert_eq!(
             ContractVersion {
                 contract: "democratized_prime_price_oracle".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: env!("CONTRACT_BUILD_VERSION").to_string(),
             },
             get_contract_version(&deps.storage).unwrap(),
         );
