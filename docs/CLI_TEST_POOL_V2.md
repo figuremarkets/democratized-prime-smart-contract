@@ -399,6 +399,8 @@ Validation rules:
 - In `reserve_factor` mode, `ff` must be zero.
 - In `flat_borrow_spread` mode, `rf` must be zero and `ff <= minr` (prevents negative lender rate at low utilization).
 
+`spy` is optional and fixed at `31536000` (a 365-day year). Omit it, or send that value; any other value is rejected. Query responses still include `spy`.
+
 Example `rate_params` for flat spread mode:
 
 ```json
