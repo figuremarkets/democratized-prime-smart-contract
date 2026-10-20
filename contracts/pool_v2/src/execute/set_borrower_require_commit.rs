@@ -10,8 +10,8 @@ use cosmwasm_std::{ensure, DepsMut, Env, MessageInfo, Response};
 use democratized_prime_lib::common::{assert_owner, ContractError};
 use result_extensions::ResultExtensions;
 
-pub const ACTION: &str = "set_borrower_require_commit_on_exit";
-pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may set borrower commit-on-exit rules";
+pub const ACTION: &str = "set_borrower_require_commit";
+pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may set borrower commit rules";
 
 /// Set or clear per-address "require commit on exit" for a borrower.
 /// When true, fund committment will occur
@@ -36,7 +36,7 @@ pub fn set_borrower_require_commit_on_exit(
             ensure!(
                 contract.commit_market_id.is_some(),
                 illegal_argument(
-                    "Commit market must be configured (commit_market_id) before requiring commit on exit",
+                    "Commit market must be configured (commit_market_id) before requiring commit",
                 )
             );
             store_borrower_require_commit_on_exit(deps.storage, &borrower, true)?
