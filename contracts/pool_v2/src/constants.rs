@@ -40,7 +40,7 @@ pub const ATTRIBUTE_LEND_RATE: &str = "lend_rate";
 pub const ATTRIBUTE_LIQUIDITY_INDEX: &str = "liquidity_index";
 pub const ATTRIBUTE_UTILIZATION: &str = "utilization";
 pub const ATTRIBUTE_RECIPIENT: &str = "recipient";
-pub const ATTRIBUTE_REQUIRED: &str = "required";
+pub const ATTRIBUTE_REQUIRE: &str = "require";
 pub const ATTRIBUTE_SENDER: &str = "sender";
 pub const ATTRIBUTE_SCALED_AMOUNT: &str = "scaled_amount";
 /// Value is JSON array of asset ids. Uses `_json` suffix for JSON payloads.
