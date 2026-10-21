@@ -126,7 +126,6 @@ pub fn remove_collateral(
         .collect();
 
     let recommit_funds: Vec<ProvCoin> = send_coins
-        .clone()
         .iter()
         .map(|c| ProvCoin {
             amount: c.amount.to_string(),
