@@ -29,7 +29,7 @@ pub use liquidate::liquidate;
 pub use receive::receive;
 pub use remove_collateral::remove_collateral;
 pub use repay::repay;
-pub use set_borrower_require_commit::set_borrower_require_commit_on_exit;
+pub use set_borrower_require_commit::set_borrower_require_commit;
 pub use set_borrower_required_attrs::set_borrower_required_attrs;
 pub use set_lender_require_commit::set_lender_require_commit_on_exit;
 pub use set_lender_required_attrs::set_lender_required_attrs;

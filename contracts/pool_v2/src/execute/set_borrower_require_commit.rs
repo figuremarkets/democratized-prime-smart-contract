@@ -13,12 +13,12 @@ use result_extensions::ResultExtensions;
 pub const ACTION: &str = "set_borrower_require_commit";
 pub const ASSERT_OWNER_ERR: &str = "Only the contract owner may set borrower commit rules";
 
-/// Set or clear per-address "require commit on exit" for a borrower.
+/// Set or clear per-address "require commit" for a borrower.
 /// When true, fund committment will occur
 /// - when borrowing
 /// - when there is an excess of funds when repaying a debt
 /// - removing collateral
-pub fn set_borrower_require_commit_on_exit(
+pub fn set_borrower_require_commit(
     deps: DepsMut,
     _env: Env,
     info: MessageInfo,

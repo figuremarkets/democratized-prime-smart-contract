@@ -3,7 +3,7 @@ use crate::constants::{
 };
 use crate::execute::{
     add_collateral, adjust_directed_collateral_sale, borrow, eliminate_deficit, execute_withdraw,
-    lend, liquidate, receive, remove_collateral, repay, set_borrower_require_commit_on_exit,
+    lend, liquidate, receive, remove_collateral, repay, set_borrower_require_commit,
     set_borrower_required_attrs, set_lender_require_commit_on_exit, set_lender_required_attrs,
     set_operational_state, socialize_deficit, update_contract_config, update_rate_params,
     update_supported_collateral, withdraw_reserve, UpdateContractConfigParams,
@@ -154,7 +154,7 @@ pub fn execute(
             update_rate_params(deps, env, info, rate_params)
         }
         ExecuteMsg::SetBorrowerRequireCommit { address, require } => {
-            set_borrower_require_commit_on_exit(deps, env, info, address, require)
+            set_borrower_require_commit(deps, env, info, address, require)
         }
         ExecuteMsg::SetLenderRequireCommitOnExit { address, require } => {
             set_lender_require_commit_on_exit(deps, env, info, address, require)
