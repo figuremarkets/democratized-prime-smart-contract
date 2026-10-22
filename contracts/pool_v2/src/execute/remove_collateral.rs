@@ -3,8 +3,8 @@ use crate::model::error::{illegal_argument, illegal_state, invalid_funds, Contra
 use crate::model::BorrowerCollateralV1;
 use crate::response::new_commit_message;
 use crate::storage::{
-    get_borrower_collateral, get_borrower_require_commit_on_exit, get_contract_state_v1,
-    get_scaled_borrow, set_borrower_collateral, subtract_total_collateral,
+    get_borrower_collateral, get_borrower_require_commit, get_contract_state_v1, get_scaled_borrow,
+    set_borrower_collateral, subtract_total_collateral,
 };
 use crate::utils::{
     get_asset_prices_for_borrower, get_borrower_health, scaled_to_underlying_borrow,
@@ -47,7 +47,7 @@ pub fn remove_collateral(
     let borrower = info.sender.to_string();
     let current = get_borrower_collateral(deps.storage, &borrower)?;
 
-    let commit_funds: bool = get_borrower_require_commit_on_exit(deps.storage, &info.sender)?;
+    let commit_funds: bool = get_borrower_require_commit(deps.storage, &info.sender)?;
 
     let mut new_amounts = current.amounts.clone();
     let mut send_coins: Vec<Coin> = Vec::with_capacity(to_remove.len());

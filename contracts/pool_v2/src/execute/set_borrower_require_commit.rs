@@ -3,8 +3,8 @@
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_ADDRESS, ATTRIBUTE_REQUIRE};
 use crate::model::error::{illegal_argument, invalid_funds};
 use crate::storage::{
-    get_contract_state_v1, remove_borrower_require_commit_on_exit,
-    set_borrower_require_commit_on_exit as store_borrower_require_commit_on_exit,
+    get_contract_state_v1, remove_borrower_require_commit,
+    set_borrower_require_commit as store_borrower_require_commit_on_exit,
 };
 use cosmwasm_std::{ensure, DepsMut, Env, MessageInfo, Response};
 use democratized_prime_lib::common::{assert_owner, ContractError};
@@ -42,7 +42,7 @@ pub fn set_borrower_require_commit_on_exit(
             store_borrower_require_commit_on_exit(deps.storage, &borrower, true)?
         }
         Some(false) => store_borrower_require_commit_on_exit(deps.storage, &borrower, false)?,
-        None => remove_borrower_require_commit_on_exit(deps.storage, &borrower),
+        None => remove_borrower_require_commit(deps.storage, &borrower),
     }
 
     Response::new()

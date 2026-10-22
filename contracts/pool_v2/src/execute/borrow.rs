@@ -4,8 +4,8 @@ use crate::constants::{
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
 use crate::response::new_commit_message;
 use crate::storage::{
-    get_borrower_collateral, get_borrower_require_commit_on_exit, get_contract_state_v1,
-    get_scaled_borrow, set_reserve_state_v1, set_scaled_borrow,
+    get_borrower_collateral, get_borrower_require_commit, get_contract_state_v1, get_scaled_borrow,
+    set_reserve_state_v1, set_scaled_borrow,
 };
 use crate::utils::{
     debt_after_borrow, get_asset_prices_for_borrower, get_borrower_health,
@@ -46,7 +46,7 @@ pub fn borrow(
         &contract.borrower_required_attrs,
     )?;
 
-    let commit_funds: bool = get_borrower_require_commit_on_exit(deps.storage, &info.sender)?;
+    let commit_funds: bool = get_borrower_require_commit(deps.storage, &info.sender)?;
 
     let mut reserve = update_reserve_indexes(deps.storage, &env, &contract.rate_params)?;
 

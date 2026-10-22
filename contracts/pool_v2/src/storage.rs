@@ -7,8 +7,7 @@ pub mod reserve;
 pub mod scaled_borrow;
 
 pub use borrower_require_commit::{
-    get_borrower_require_commit_on_exit, remove_borrower_require_commit_on_exit,
-    set_borrower_require_commit_on_exit,
+    get_borrower_require_commit, remove_borrower_require_commit, set_borrower_require_commit,
 };
 pub use collateral::{
     add_total_collateral, get_borrower_collateral, get_total_collateral_by_asset,

@@ -11,7 +11,7 @@ const BORROWER_REQUIRE_COMMIT_ON_EXIT: Map<&str, ()> =
     Map::new(STORAGE_KEY_BORROWER_REQUIRE_COMMIT);
 
 /// Returns true if this borrower must pass commit_funds when withdrawing; false if not set.
-pub fn get_borrower_require_commit_on_exit(
+pub fn get_borrower_require_commit(
     store: &dyn Storage,
     borrower: &Addr,
 ) -> Result<bool, ContractError> {
@@ -21,8 +21,8 @@ pub fn get_borrower_require_commit_on_exit(
         .map(|v| v.is_some())
 }
 
-/// Set the per-address "require commit on exit". true = require; false = clear (no requirement).
-pub fn set_borrower_require_commit_on_exit(
+/// Set the per-address "require commit". true = require; false = clear (no requirement).
+pub fn set_borrower_require_commit(
     store: &mut dyn Storage,
     lender: &Addr,
     require: bool,
@@ -32,12 +32,12 @@ pub fn set_borrower_require_commit_on_exit(
             .save(store, lender.as_str(), &())
             .map_err(ContractError::Std)
     } else {
-        remove_borrower_require_commit_on_exit(store, lender);
+        remove_borrower_require_commit(store, lender);
         Ok(())
     }
 }
 
 /// Clear the per-address requirement (same as set to false).
-pub fn remove_borrower_require_commit_on_exit(store: &mut dyn Storage, lender: &Addr) {
+pub fn remove_borrower_require_commit(store: &mut dyn Storage, lender: &Addr) {
     BORROWER_REQUIRE_COMMIT_ON_EXIT.remove(store, lender.as_str());
 }
