@@ -1,4 +1,5 @@
 mod borrower_position_tests;
+mod borrower_status_tests;
 mod collateral_requirements_tests;
 pub(crate) mod common;
 mod lender_status_tests;

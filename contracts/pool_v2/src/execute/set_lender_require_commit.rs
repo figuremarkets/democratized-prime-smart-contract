@@ -1,6 +1,6 @@
 //! Contract owner only: set or clear per-address "require commit on exit" for lenders.
 
-use crate::constants::ATTRIBUTE_ACTION_NAME;
+use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_ADDRESS, ATTRIBUTE_REQUIRE};
 use crate::model::error::{illegal_argument, invalid_funds};
 use crate::storage::{
     get_contract_state_v1, remove_lender_require_commit_on_exit,
@@ -44,9 +44,9 @@ pub fn set_lender_require_commit_on_exit(
 
     Response::new()
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
-        .add_attribute("address", lender.as_str())
+        .add_attribute(ATTRIBUTE_ADDRESS, lender.as_str())
         .add_attribute(
-            "require",
+            ATTRIBUTE_REQUIRE,
             require
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| "default".to_string()),

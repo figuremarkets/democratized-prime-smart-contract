@@ -4,6 +4,7 @@ use crate::constants::{
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
 use crate::model::ReserveStateV1;
 use crate::msg::repo_token::{RepoTokenExecuteMsg, RepoTokenQueryMsg, RepoTokenScaledBalanceQuery};
+use crate::response::new_commit_message;
 use crate::storage::{
     get_contract_state_v1, get_lender_require_commit_on_exit, set_reserve_state_v1,
 };
@@ -12,14 +13,11 @@ use crate::utils::{
     update_reserve_indexes, WithRates,
 };
 use cosmwasm_std::{
-    ensure, to_json_binary, Addr, BankMsg, Coin, CosmosMsg, DepsMut, Empty, Env, MessageInfo,
-    Response, Storage, Uint128, WasmMsg,
+    ensure, to_json_binary, Addr, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Storage,
+    Uint128, WasmMsg,
 };
 use cw20::{BalanceResponse, Cw20ExecuteMsg};
 use democratized_prime_lib::common::assert_owner;
-use provwasm_std::types::cosmos::authz::v1beta1::MsgExec;
-use provwasm_std::types::cosmos::base::v1beta1::Coin as ProvCoin;
-use provwasm_std::types::provenance::exchange::v1::MsgCommitFundsRequest;
 use serde::Serialize;
 
 /// Deduct scaled liquidity from reserve and persist. Shared by both withdraw paths.
@@ -156,24 +154,14 @@ pub fn execute_withdraw(
         .add_attribute(ATTRIBUTE_SCALED_AMOUNT, scaled_to_burn.to_string());
 
     if commit_funds == Some(true) {
-        let market_id = contract.commit_market_id.ok_or_else(|| {
-            illegal_argument(
-                "commit_funds is true but commit_market_id is not configured on the contract",
-            )
-        })?;
-        let funds: Vec<ProvCoin> = vec![contract.lending_denom.to_prov_coin(underlying_to_send)];
-        let commit_msg: CosmosMsg<Empty> = MsgExec {
-            grantee: env.contract.address.to_string(),
-            msgs: vec![MsgCommitFundsRequest {
-                account: lender_addr.to_string(),
-                market_id,
-                amount: funds,
-                creation_fee: None,
-                event_tag: format!("demo-prime:withdraw:{}:{}", lender_addr.as_str(), ACTION),
-            }
-            .to_any()],
-        }
-        .into();
+        let commit_msg = new_commit_message(
+            &contract,
+            &env.contract.address,
+            &ACTION,
+            &ACTION,
+            &lender_addr,
+            vec![contract.lending_denom.to_prov_coin(underlying_to_send)],
+        )?;
         res = res.add_message(commit_msg);
     }
 
@@ -268,24 +256,14 @@ pub fn execute_withdraw_cw20(
 
     // When commit_funds is true, require commit_market_id and emit MsgCommitFundsRequest.
     if commit_funds == Some(true) {
-        let market_id = contract.commit_market_id.ok_or_else(|| {
-            illegal_argument(
-                "commit_funds is true but commit_market_id is not configured on the contract",
-            )
-        })?;
-        let funds: Vec<ProvCoin> = vec![contract.lending_denom.to_prov_coin(underlying_to_send)];
-        let commit_msg: CosmosMsg<Empty> = MsgExec {
-            grantee: env.contract.address.to_string(),
-            msgs: vec![MsgCommitFundsRequest {
-                account: sender.to_string(),
-                market_id,
-                amount: funds,
-                creation_fee: None,
-                event_tag: format!("demo-prime:withdraw:{}:{}", sender.as_str(), action_name),
-            }
-            .to_any()],
-        }
-        .into();
+        let commit_msg = new_commit_message(
+            &contract,
+            &env.contract.address,
+            &ACTION,
+            &action_name,
+            &sender,
+            vec![contract.lending_denom.to_prov_coin(underlying_to_send)],
+        )?;
         res = res.add_message(commit_msg);
     }
 

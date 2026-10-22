@@ -2,9 +2,10 @@ use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BORROWER, ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
+use crate::response::new_commit_message;
 use crate::storage::{
-    get_borrower_collateral, get_contract_state_v1, get_scaled_borrow, set_reserve_state_v1,
-    set_scaled_borrow,
+    get_borrower_collateral, get_borrower_require_commit, get_contract_state_v1, get_scaled_borrow,
+    set_reserve_state_v1, set_scaled_borrow,
 };
 use crate::utils::{
     debt_after_borrow, get_asset_prices_for_borrower, get_borrower_health,
@@ -44,6 +45,8 @@ pub fn borrow(
         info.sender.as_str(),
         &contract.borrower_required_attrs,
     )?;
+
+    let commit_funds: bool = get_borrower_require_commit(deps.storage, &info.sender)?;
 
     let mut reserve = update_reserve_indexes(deps.storage, &env, &contract.rate_params)?;
 
@@ -103,11 +106,24 @@ pub fn borrow(
         }],
     };
 
-    Response::new()
+    let mut res = Response::new()
         .add_message(send_msg)
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
         .add_attribute(ATTRIBUTE_BORROWER, info.sender.as_str())
         .add_attribute(ATTRIBUTE_AMOUNT, amount.to_string())
-        .add_attribute(ATTRIBUTE_SCALED_AMOUNT, scaled_delta.to_string())
-        .attach_rates(&reserve, &contract.rate_params)
+        .add_attribute(ATTRIBUTE_SCALED_AMOUNT, scaled_delta.to_string());
+
+    if commit_funds {
+        let commit_msg = new_commit_message(
+            &contract,
+            &env.contract.address,
+            &ACTION,
+            &ACTION,
+            &info.sender,
+            vec![contract.lending_denom.to_prov_coin(amount)],
+        )?;
+        res = res.add_message(commit_msg);
+    }
+
+    res.attach_rates(&reserve, &contract.rate_params)
 }

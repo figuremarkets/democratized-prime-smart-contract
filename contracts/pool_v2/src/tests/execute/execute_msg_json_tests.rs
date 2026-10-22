@@ -272,6 +272,17 @@ fn set_lender_required_attrs_json_deserializes() {
 }
 
 #[test]
+fn set_borrower_require_commit_json_deserializes() {
+    assert_json_deserializes(
+        r#"{"set_borrower_require_commit":{"address":"tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu","require":true}}"#,
+        ExecuteMsg::SetBorrowerRequireCommit {
+            address: "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu".to_string(),
+            require: Some(true),
+        },
+    );
+}
+
+#[test]
 fn set_borrower_required_attrs_json_deserializes() {
     assert_json_deserializes(
         r#"{"set_borrower_required_attrs":{"borrower_required_attrs":["kyc.passed"]}}"#,

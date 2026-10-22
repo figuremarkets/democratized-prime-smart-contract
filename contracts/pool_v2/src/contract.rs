@@ -3,18 +3,18 @@ use crate::constants::{
 };
 use crate::execute::{
     add_collateral, adjust_directed_collateral_sale, borrow, eliminate_deficit, execute_withdraw,
-    lend, liquidate, receive, remove_collateral, repay, set_borrower_required_attrs,
-    set_lender_require_commit_on_exit, set_lender_required_attrs, set_operational_state,
-    socialize_deficit, update_contract_config, update_rate_params, update_supported_collateral,
-    withdraw_reserve, UpdateContractConfigParams,
+    lend, liquidate, receive, remove_collateral, repay, set_borrower_require_commit_on_exit,
+    set_borrower_required_attrs, set_lender_require_commit_on_exit, set_lender_required_attrs,
+    set_operational_state, socialize_deficit, update_contract_config, update_rate_params,
+    update_supported_collateral, withdraw_reserve, UpdateContractConfigParams,
 };
 use crate::instantiate::{instantiate_contract, reply as reply_handler};
 use crate::model::error::{illegal_argument, illegal_state, ContractError, QueryError};
 use crate::model::{ContractStateV1, OperationalState};
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 use crate::query::{
-    query_borrower_position, query_collateral_requirements, query_lender_status, query_reserve,
-    query_state,
+    query_borrower_position, query_borrower_status, query_collateral_requirements,
+    query_lender_status, query_reserve, query_state,
 };
 use crate::storage::contract_state::ITEM;
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
@@ -62,6 +62,7 @@ pub fn execute(
             | ExecuteMsg::UpdateOwnership(_)
             | ExecuteMsg::SetLenderRequiredAttrs { .. }
             | ExecuteMsg::SetBorrowerRequiredAttrs { .. }
+            | ExecuteMsg::SetBorrowerRequireCommit { .. }
             | ExecuteMsg::SetLenderRequireCommitOnExit { .. }
             | ExecuteMsg::UpdateContractConfig { .. }
             | ExecuteMsg::UpdateRateParams { .. }
@@ -152,6 +153,9 @@ pub fn execute(
         ExecuteMsg::UpdateRateParams { rate_params } => {
             update_rate_params(deps, env, info, rate_params)
         }
+        ExecuteMsg::SetBorrowerRequireCommit { address, require } => {
+            set_borrower_require_commit_on_exit(deps, env, info, address, require)
+        }
         ExecuteMsg::SetLenderRequireCommitOnExit { address, require } => {
             set_lender_require_commit_on_exit(deps, env, info, address, require)
         }
@@ -181,6 +185,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> Result<Binary, QueryError> 
             new_loan_amount,
             &collateral_assets,
         ),
+        QueryMsg::GetBorrowerStatus { address } => query_borrower_status(deps, &address),
         QueryMsg::GetLenderStatus { address } => query_lender_status(deps, &address),
     }
 }

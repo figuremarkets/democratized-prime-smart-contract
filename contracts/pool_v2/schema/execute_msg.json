@@ -495,6 +495,34 @@
       "additionalProperties": false
     },
     {
+      "description": "Per-borrower require-commit (contract owner only). `Some(true)` marks the address, `Some(false)` stores false, and `None` clears the entry. Enabling requires `commit_market_id`.",
+      "type": "object",
+      "required": [
+        "set_borrower_require_commit"
+      ],
+      "properties": {
+        "set_borrower_require_commit": {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "require": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
       "description": "Per-address \"require commit on exit\" for lenders (contract owner only). When set to true for an address, that lender must pass commit_funds: true in Withdraw/WithdrawExact payloads. None = remove override.",
       "type": "object",
       "required": [

@@ -5,6 +5,7 @@ pub mod permission;
 pub mod price;
 pub mod rates;
 pub mod response_ext;
+pub mod tag;
 pub mod validation;
 
 pub use health::{
@@ -27,6 +28,7 @@ pub use rates::{
     underlying_to_scaled_borrow_ceil, underlying_to_scaled_liquidity, update_reserve_indexes,
 };
 pub use response_ext::WithRates;
+pub use tag::new_event_tag;
 pub use validation::{
     validate_borrower_attrs, validate_borrower_collateral_type_limit, validate_lender_attrs,
     validate_required_attr_pattern, validate_required_attr_patterns, validate_single_coin_denom,

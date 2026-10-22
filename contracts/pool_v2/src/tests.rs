@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod assertions;
+#[cfg(test)]
 mod fixtures;
 
 #[cfg(test)]
@@ -17,6 +19,8 @@ mod query;
 mod reserve_invariant;
 #[cfg(test)]
 mod response_attrs;
+#[cfg(test)]
+mod types;
 #[cfg(test)]
 mod utils;
 #[cfg(test)]

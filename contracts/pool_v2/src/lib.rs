@@ -5,6 +5,7 @@ pub mod instantiate;
 pub mod model;
 pub mod msg;
 pub mod query;
+pub mod response;
 pub mod storage;
 #[cfg(test)]
 pub mod tests;

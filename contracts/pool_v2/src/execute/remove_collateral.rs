@@ -1,15 +1,17 @@
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_BORROWER, ATTRIBUTE_COLLATERAL_JSON};
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
 use crate::model::BorrowerCollateralV1;
+use crate::response::new_commit_message;
 use crate::storage::{
-    get_borrower_collateral, get_contract_state_v1, get_scaled_borrow, set_borrower_collateral,
-    subtract_total_collateral,
+    get_borrower_collateral, get_borrower_require_commit, get_contract_state_v1, get_scaled_borrow,
+    set_borrower_collateral, subtract_total_collateral,
 };
 use crate::utils::{
     get_asset_prices_for_borrower, get_borrower_health, scaled_to_underlying_borrow,
     update_reserve_indexes, validate_borrower_attrs, validate_borrower_is_healthy, WithRates,
 };
 use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
+use provwasm_std::types::cosmos::base::v1beta1::Coin as ProvCoin;
 use std::collections::{BTreeMap, HashSet};
 
 pub const ACTION: &str = "remove_collateral";
@@ -44,6 +46,8 @@ pub fn remove_collateral(
 
     let borrower = info.sender.to_string();
     let current = get_borrower_collateral(deps.storage, &borrower)?;
+
+    let commit_funds: bool = get_borrower_require_commit(deps.storage, &info.sender)?;
 
     let mut new_amounts = current.amounts.clone();
     let mut send_coins: Vec<Coin> = Vec::with_capacity(to_remove.len());
@@ -117,7 +121,16 @@ pub fn remove_collateral(
         .iter()
         .map(|(d, a)| (d.clone(), a.to_string()))
         .collect();
-    let res = Response::new()
+
+    let recommit_funds: Vec<ProvCoin> = send_coins
+        .iter()
+        .map(|c| ProvCoin {
+            amount: c.amount.to_string(),
+            denom: c.denom.to_owned(),
+        })
+        .collect();
+
+    let mut res = Response::new()
         .add_message(BankMsg::Send {
             to_address: info.sender.to_string(),
             amount: send_coins,
@@ -128,5 +141,18 @@ pub fn remove_collateral(
             ATTRIBUTE_COLLATERAL_JSON,
             serde_json::to_string(&collateral_json).unwrap_or_default(),
         );
+
+    if commit_funds {
+        let commit_msg = new_commit_message(
+            &contract,
+            &env.contract.address,
+            &ACTION,
+            &ACTION,
+            &info.sender,
+            recommit_funds,
+        )?;
+        res = res.add_message(commit_msg);
+    }
+
     res.attach_rates(&reserve, &contract.rate_params)
 }

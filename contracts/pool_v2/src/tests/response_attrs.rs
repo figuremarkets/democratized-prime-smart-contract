@@ -6,7 +6,10 @@ use crate::constants::{
 };
 use crate::storage::{get_contract_state_v1, get_reserve_state_v1};
 use crate::utils::compute_effective_reserve;
-use cosmwasm_std::{Response, Storage, Timestamp};
+use cosmwasm_std::{CosmosMsg, Response, Storage, Timestamp};
+use provwasm_std::types::cosmos::authz::v1beta1::MsgExec;
+use provwasm_std::types::provenance::exchange::v1::MsgCommitFundsRequest;
+use std::convert::TryFrom;
 
 fn attr_value<'a>(res: &'a Response, key: &str) -> &'a str {
     let keys: Vec<&str> = res.attributes.iter().map(|a| a.key.as_str()).collect();
@@ -16,6 +19,19 @@ fn attr_value<'a>(res: &'a Response, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("expected attribute {:?}, found keys {:?}", key, keys))
         .value
         .as_str()
+}
+
+pub fn decode_commit(msg: &CosmosMsg, grantee: &str) -> MsgCommitFundsRequest {
+    let any = match msg {
+        CosmosMsg::Any(any) => any,
+        other => panic!("expected commit MsgExec, got {:?}", other),
+    };
+    assert_eq!(any.type_url, MsgExec::TYPE_URL);
+    let exec = MsgExec::try_from(any.value.clone()).expect("decode MsgExec");
+    assert_eq!(exec.grantee, grantee);
+    assert_eq!(exec.msgs.len(), 1);
+    assert_eq!(exec.msgs[0].type_url, MsgCommitFundsRequest::TYPE_URL);
+    MsgCommitFundsRequest::try_from(exec.msgs[0].clone()).expect("decode MsgCommitFundsRequest")
 }
 
 fn assert_lend_borrow_rate_attributes_match_expected(
