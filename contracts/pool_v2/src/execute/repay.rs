@@ -2,6 +2,7 @@ use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BORROWER, ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::model::error::{illegal_argument, illegal_state, ContractError};
+use crate::response::new_commit_message;
 use crate::storage::{
     get_borrower_require_commit_on_exit, get_contract_state_v1, get_scaled_borrow,
     set_reserve_state_v1, set_scaled_borrow,
@@ -10,12 +11,7 @@ use crate::utils::{
     scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow, update_reserve_indexes,
     validate_single_coin_denom, WithRates,
 };
-use cosmwasm_std::{
-    ensure, BankMsg, Coin, CosmosMsg, DepsMut, Empty, Env, MessageInfo, Response, Uint128,
-};
-use provwasm_std::types::cosmos::authz::v1beta1::MsgExec;
-use provwasm_std::types::cosmos::base::v1beta1::Coin as ProvCoin;
-use provwasm_std::types::provenance::exchange::v1::MsgCommitFundsRequest;
+use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 
 pub const ACTION: &str = "repay";
 
@@ -80,26 +76,14 @@ pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Con
         });
 
         if commit_funds {
-            let market_id = contract.commit_market_id.ok_or_else(|| {
-                illegal_argument("commit_market_id is not configured on the contract")
-            })?;
-            let funds: Vec<ProvCoin> = vec![contract.lending_denom.to_prov_coin(excess)];
-            let commit_msg: CosmosMsg<Empty> = MsgExec {
-                grantee: env.contract.address.to_string(),
-                msgs: vec![MsgCommitFundsRequest {
-                    account: info.sender.to_string(),
-                    market_id,
-                    amount: funds,
-                    creation_fee: None,
-                    event_tag: format!(
-                        "demo-prime:{}:{}:repay_refund",
-                        ACTION,
-                        info.sender.as_str()
-                    ),
-                }
-                .to_any()],
-            }
-            .into();
+            let commit_msg = new_commit_message(
+                &contract,
+                &env.contract.address,
+                ACTION,
+                "repay_refund",
+                &info.sender,
+                vec![contract.lending_denom.to_prov_coin(excess)],
+            )?;
             res = res.add_message(commit_msg);
         }
     }

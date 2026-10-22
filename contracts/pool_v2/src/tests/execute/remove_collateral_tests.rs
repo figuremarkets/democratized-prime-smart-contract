@@ -607,7 +607,15 @@ fn remove_collateral_marked_sends_then_commits() {
         other => panic!("expected Bank::Send first, got {:?}", other),
     }
     let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
-    assert_commit_matches(&commit, BORROWER, &sent);
+    assert_commit_matches(
+        &commit,
+        BORROWER,
+        &sent,
+        &format!(
+            "demo-prime:remove_collateral:{}:remove_collateral",
+            BORROWER
+        ),
+    );
 }
 
 #[test]
@@ -649,7 +657,15 @@ fn remove_collateral_marked_multi_denom_commits_all() {
         other => panic!("expected Bank::Send first, got {:?}", other),
     }
     let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
-    assert_commit_matches(&commit, BORROWER, &sent);
+    assert_commit_matches(
+        &commit,
+        BORROWER,
+        &sent,
+        &format!(
+            "demo-prime:remove_collateral:{}:remove_collateral",
+            BORROWER
+        ),
+    );
 }
 
 #[test]

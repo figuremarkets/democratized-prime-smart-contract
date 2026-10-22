@@ -1,6 +1,7 @@
 use crate::constants::{ATTRIBUTE_ACTION_NAME, ATTRIBUTE_BORROWER, ATTRIBUTE_COLLATERAL_JSON};
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
 use crate::model::BorrowerCollateralV1;
+use crate::response::new_commit_message;
 use crate::storage::{
     get_borrower_collateral, get_borrower_require_commit_on_exit, get_contract_state_v1,
     get_scaled_borrow, set_borrower_collateral, subtract_total_collateral,
@@ -9,12 +10,8 @@ use crate::utils::{
     get_asset_prices_for_borrower, get_borrower_health, scaled_to_underlying_borrow,
     update_reserve_indexes, validate_borrower_attrs, validate_borrower_is_healthy, WithRates,
 };
-use cosmwasm_std::{
-    ensure, BankMsg, Coin, CosmosMsg, DepsMut, Empty, Env, MessageInfo, Response, Uint128,
-};
-use provwasm_std::types::cosmos::authz::v1beta1::MsgExec;
+use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::types::cosmos::base::v1beta1::Coin as ProvCoin;
-use provwasm_std::types::provenance::exchange::v1::MsgCommitFundsRequest;
 use std::collections::{BTreeMap, HashSet};
 
 pub const ACTION: &str = "remove_collateral";
@@ -146,22 +143,14 @@ pub fn remove_collateral(
         );
 
     if commit_funds {
-        let market_id = contract.commit_market_id.ok_or_else(|| {
-            illegal_argument("commit_market_id is not configured on the contract")
-        })?;
-
-        let commit_msg: CosmosMsg<Empty> = MsgExec {
-            grantee: env.contract.address.to_string(),
-            msgs: vec![MsgCommitFundsRequest {
-                account: info.sender.to_string(),
-                market_id,
-                amount: recommit_funds,
-                creation_fee: None,
-                event_tag: format!("demo-prime:{}:{}:{}", ACTION, info.sender.as_str(), ACTION,),
-            }
-            .to_any()],
-        }
-        .into();
+        let commit_msg = new_commit_message(
+            &contract,
+            &env.contract.address,
+            &ACTION,
+            &ACTION,
+            &info.sender,
+            recommit_funds,
+        )?;
         res = res.add_message(commit_msg);
     }
 

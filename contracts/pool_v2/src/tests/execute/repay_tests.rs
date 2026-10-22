@@ -638,7 +638,12 @@ fn repay_marked_overage_refunds_then_commits() {
         other => panic!("expected Bank::Send first, got {:?}", other),
     }
     let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
-    assert_commit_matches(&commit, BORROWER, &[coin(refund, LENDING_DENOM)]);
+    assert_commit_matches(
+        &commit,
+        BORROWER,
+        &[coin(refund, LENDING_DENOM)],
+        &format!("demo-prime:repay:{}:repay_refund", BORROWER),
+    );
 }
 
 #[test]
@@ -759,7 +764,12 @@ fn repay_marked_overage_worked_example_refunds_then_commits() {
         other => panic!("expected Bank::Send first, got {:?}", other),
     }
     let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
-    assert_commit_matches(&commit, BORROWER, &[coin(950, LENDING_DENOM)]);
+    assert_commit_matches(
+        &commit,
+        BORROWER,
+        &[coin(950, LENDING_DENOM)],
+        &format!("demo-prime:repay:{}:repay_refund", BORROWER),
+    );
 
     // Plain messages: a failing commit (e.g. missing authz grant) aborts the whole transaction.
     for msg in &res.messages {

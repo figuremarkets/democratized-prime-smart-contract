@@ -15,18 +15,22 @@ use crate::model::{CollateralAssetV1, Denom, RateParamsV1};
 use crate::msg::execute::Cw20ReceivePayload;
 use crate::msg::{ExecuteMsg, InstantiateMsg, RepoTokenConfig};
 use crate::storage::get_reserve_state_v1;
+use crate::tests::assertions::assert_commit_matches;
+use crate::tests::execute::set_commit_market_id;
 use crate::tests::query::common::{CUSTODIAN, LIQUIDATOR, OWNER};
 use crate::tests::reserve_invariant::{
     assert_assets_liabilities_tie_out, assert_assets_liabilities_tie_out_with_tolerance,
 };
-use crate::tests::response_attrs::assert_response_lend_borrow_rates_match_reserve;
+use crate::tests::response_attrs::{
+    assert_response_lend_borrow_rates_match_reserve, decode_commit,
+};
 use crate::utils::{
     scaled_to_underlying_borrow, scaled_to_underlying_liquidity, underlying_to_scaled_liquidity,
 };
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
     coin, from_json, to_json_binary, Addr, BankMsg, ContractResult, CosmosMsg, Decimal256, Env,
-    MemoryStorage, OwnedDeps, QuerierResult, SystemError, SystemResult, Uint128, WasmMsg,
+    MemoryStorage, OwnedDeps, QuerierResult, Response, SystemError, SystemResult, Uint128, WasmMsg,
     WasmQuery,
 };
 use cw20::{BalanceResponse, Cw20ExecuteMsg, Cw20ReceiveMsg};
@@ -120,6 +124,26 @@ fn setup_with_liquidity() -> (
 
     let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
     (deps, env, reserve.total_scaled_liquidity)
+}
+
+/// Asserts the response is burn, send to LENDER, then a commit of the sent coins tagged with
+/// `sub_action`.
+fn assert_withdraw_commit(res: &Response, env: &Env, sub_action: &str) {
+    assert_eq!(res.messages.len(), 3, "burn + send + commit");
+    let sent = match &res.messages[1].msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            assert_eq!(to_address.as_str(), LENDER);
+            amount.clone()
+        }
+        other => panic!("expected Bank::Send second, got {:?}", other),
+    };
+    let commit = decode_commit(&res.messages[2].msg, env.contract.address.as_str());
+    assert_commit_matches(
+        &commit,
+        LENDER,
+        &sent,
+        &format!("demo-prime:withdraw:{}:{}", LENDER, sub_action),
+    );
 }
 
 fn price_entry(price: &str) -> AssetPriceResponseV1 {
@@ -681,7 +705,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
         underlying_to_scaled_liquidity(withdraw_underlying, reserve.liquidity_index).unwrap();
     let res = execute(
         deps.as_mut(),
-        env,
+        env.clone(),
         message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
         ExecuteMsg::Receive(Cw20ReceiveMsg {
             sender: LENDER.to_string(),
@@ -696,11 +720,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
     .expect("withdraw with commit_funds true should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    assert_eq!(
-        res.messages.len(),
-        3,
-        "burn + send + commit (commit_market_id set)"
-    );
+    assert_withdraw_commit(&res, &env, ACTION);
 }
 
 #[test]
@@ -736,7 +756,7 @@ fn withdraw_with_commit_funds_true_and_commit_market_id_emits_commit_message() {
         underlying_to_scaled_liquidity(withdraw_underlying, reserve.liquidity_index).unwrap();
     let res = execute(
         deps.as_mut(),
-        env,
+        env.clone(),
         message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
         ExecuteMsg::Receive(Cw20ReceiveMsg {
             sender: LENDER.to_string(),
@@ -751,17 +771,33 @@ fn withdraw_with_commit_funds_true_and_commit_market_id_emits_commit_message() {
     .expect("withdraw should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    // Burn + Bank Send + commit message (Any/Stargate MsgExec/MsgCommitFundsRequest)
-    assert_eq!(res.messages.len(), 3);
-    let type_url = match &res.messages[2].msg {
-        CosmosMsg::Any(any) => any.type_url.as_str(),
-        other => panic!("expected third message to be commit (Any), got {:?}", other),
-    };
-    assert!(
-        type_url.contains("MsgExec") || type_url.contains("authz"),
-        "commit message should be MsgExec: got type_url {}",
-        type_url
-    );
+    assert_withdraw_commit(&res, &env, ACTION);
+}
+
+#[test]
+fn withdraw_exact_with_commit_funds_true_emits_commit_message() {
+    let (mut deps, env, _) = setup_with_liquidity();
+    set_commit_market_id(&mut deps, &env);
+
+    let reserve = get_reserve_state_v1(deps.as_ref().storage).unwrap();
+    let scaled = underlying_to_scaled_liquidity(10_000_000u128, reserve.liquidity_index).unwrap();
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(REPO_TOKEN_CW20), &[]),
+        ExecuteMsg::Receive(Cw20ReceiveMsg {
+            sender: LENDER.to_string(),
+            amount: Uint128::from(scaled),
+            msg: to_json_binary(&Cw20ReceivePayload::WithdrawExact {
+                commit_funds: Some(true),
+            })
+            .unwrap(),
+        }),
+    )
+    .expect("withdraw_exact should succeed");
+
+    assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
+    assert_withdraw_commit(&res, &env, ACTION_EXACT);
 }
 
 #[test]
@@ -1332,7 +1368,7 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
     mock_repo_scaled_balance(&mut deps.querier, 50_000_000u128);
     let res = execute(
         deps.as_mut(),
-        env,
+        env.clone(),
         message_info(&Addr::unchecked(OWNER), &[]),
         ExecuteMsg::Withdraw {
             lender: LENDER.to_string(),
@@ -1343,18 +1379,5 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
     .expect("owner withdraw with commit_funds should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    assert_eq!(
-        res.messages.len(),
-        3,
-        "burn + send + commit when commit_funds true and commit_market_id set"
-    );
-    let type_url = match &res.messages[2].msg {
-        CosmosMsg::Any(any) => any.type_url.as_str(),
-        other => panic!("expected third message to be commit (Any), got {:?}", other),
-    };
-    assert!(
-        type_url.contains("MsgExec") || type_url.contains("authz"),
-        "commit message should be MsgExec: got type_url {}",
-        type_url
-    );
+    assert_withdraw_commit(&res, &env, ACTION);
 }

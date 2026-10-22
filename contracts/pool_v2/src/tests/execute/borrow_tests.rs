@@ -679,7 +679,12 @@ fn borrow_marked_borrower_sends_then_commits() {
         other => panic!("expected Bank::Send first, got {:?}", other),
     }
     let commit = decode_commit(&res.messages[1].msg, env.contract.address.as_str());
-    assert_commit_matches(&commit, BORROWER, &[coin(amount.u128(), LENDING_DENOM)]);
+    assert_commit_matches(
+        &commit,
+        BORROWER,
+        &[coin(amount.u128(), LENDING_DENOM)],
+        &format!("demo-prime:borrow:{}:borrow", BORROWER),
+    );
 }
 
 #[test]

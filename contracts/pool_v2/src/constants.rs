@@ -6,6 +6,8 @@ pub use democratized_prime_lib::common::constants::ATTRIBUTE_ACTION_NAME;
 
 pub const MAX_LENDER_BORROWER_REQUIRED_ATTRS: usize = 10;
 
+pub const EVENT_TAG_PREFIX: &str = "demo-prime";
+
 /// `SubMsg` reply id for instantiating the repo token CW20 from pool `instantiate`.
 pub const REPO_TOKEN_INSTANTIATE_REPLY_ID: u64 = 1;
 pub const ATTRIBUTE_ADDRESS: &str = "address";

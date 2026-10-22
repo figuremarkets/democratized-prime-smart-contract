@@ -2,6 +2,7 @@ use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BORROWER, ATTRIBUTE_SCALED_AMOUNT,
 };
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
+use crate::response::new_commit_message;
 use crate::storage::{
     get_borrower_collateral, get_borrower_require_commit_on_exit, get_contract_state_v1,
     get_scaled_borrow, set_reserve_state_v1, set_scaled_borrow,
@@ -11,12 +12,7 @@ use crate::utils::{
     reserve_totals_and_cash_u128, update_reserve_indexes, validate_borrower_attrs,
     validate_borrower_is_healthy, WithRates,
 };
-use cosmwasm_std::{
-    ensure, BankMsg, Coin, CosmosMsg, DepsMut, Empty, Env, MessageInfo, Response, Uint128,
-};
-use provwasm_std::types::cosmos::authz::v1beta1::MsgExec;
-use provwasm_std::types::cosmos::base::v1beta1::Coin as ProvCoin;
-use provwasm_std::types::provenance::exchange::v1::MsgCommitFundsRequest;
+use cosmwasm_std::{ensure, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, Uint128};
 
 pub const ACTION: &str = "borrow";
 
@@ -118,22 +114,14 @@ pub fn borrow(
         .add_attribute(ATTRIBUTE_SCALED_AMOUNT, scaled_delta.to_string());
 
     if commit_funds {
-        let market_id = contract.commit_market_id.ok_or_else(|| {
-            illegal_argument("commit_market_id is not configured on the contract")
-        })?;
-        let funds: Vec<ProvCoin> = vec![contract.lending_denom.to_prov_coin(amount)];
-        let commit_msg: CosmosMsg<Empty> = MsgExec {
-            grantee: env.contract.address.to_string(),
-            msgs: vec![MsgCommitFundsRequest {
-                account: info.sender.to_string(),
-                market_id,
-                amount: funds,
-                creation_fee: None,
-                event_tag: format!("demo-prime:{}:{}:{}", ACTION, info.sender.as_str(), ACTION),
-            }
-            .to_any()],
-        }
-        .into();
+        let commit_msg = new_commit_message(
+            &contract,
+            &env.contract.address,
+            &ACTION,
+            &ACTION,
+            &info.sender,
+            vec![contract.lending_denom.to_prov_coin(amount)],
+        )?;
         res = res.add_message(commit_msg);
     }
 
