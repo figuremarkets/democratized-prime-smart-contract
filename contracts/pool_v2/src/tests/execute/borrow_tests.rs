@@ -683,7 +683,7 @@ fn borrow_marked_borrower_sends_then_commits() {
         &commit,
         BORROWER,
         &[coin(amount.u128(), LENDING_DENOM)],
-        &format!("demo-prime:borrow:{}:borrow", BORROWER),
+        &format!("demo-prime:borrow:{}", BORROWER),
     );
 }
 

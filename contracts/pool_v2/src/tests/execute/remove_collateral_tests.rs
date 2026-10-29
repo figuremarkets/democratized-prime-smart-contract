@@ -611,10 +611,7 @@ fn remove_collateral_marked_sends_then_commits() {
         &commit,
         BORROWER,
         &sent,
-        &format!(
-            "demo-prime:remove_collateral:{}:remove_collateral",
-            BORROWER
-        ),
+        &format!("demo-prime:remove_collateral:{}", BORROWER),
     );
 }
 
@@ -661,10 +658,7 @@ fn remove_collateral_marked_multi_denom_commits_all() {
         &commit,
         BORROWER,
         &sent,
-        &format!(
-            "demo-prime:remove_collateral:{}:remove_collateral",
-            BORROWER
-        ),
+        &format!("demo-prime:remove_collateral:{}", BORROWER),
     );
 }
 

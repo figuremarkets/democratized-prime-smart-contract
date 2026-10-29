@@ -158,7 +158,6 @@ pub fn execute_withdraw(
             &contract,
             &env.contract.address,
             &ACTION,
-            &ACTION,
             &lender_addr,
             vec![contract.lending_denom.to_prov_coin(underlying_to_send)],
         )?;
@@ -260,7 +259,6 @@ pub fn execute_withdraw_cw20(
             &contract,
             &env.contract.address,
             &ACTION,
-            &action_name,
             &sender,
             vec![contract.lending_denom.to_prov_coin(underlying_to_send)],
         )?;

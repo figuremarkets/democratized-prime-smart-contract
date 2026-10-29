@@ -14,7 +14,6 @@ pub fn new_commit_message(
     contract_state: &ContractStateV1,
     contract_address: &Addr,
     action: &str,
-    sub_action: &str,
     account: &Addr,
     funds: Vec<ProvCoin>,
 ) -> Result<CosmosMsg<Empty>, ContractError> {
@@ -29,7 +28,7 @@ pub fn new_commit_message(
             market_id,
             amount: funds,
             creation_fee: None,
-            event_tag: new_event_tag(action, account, sub_action),
+            event_tag: new_event_tag(action, account),
         }
         .to_any()],
     }

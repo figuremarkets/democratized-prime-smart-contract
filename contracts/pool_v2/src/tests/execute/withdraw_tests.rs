@@ -127,8 +127,8 @@ fn setup_with_liquidity() -> (
 }
 
 /// Asserts the response is burn, send to LENDER, then a commit of the sent coins tagged with
-/// `sub_action`.
-fn assert_withdraw_commit(res: &Response, env: &Env, sub_action: &str) {
+/// the withdraw action and LENDER.
+fn assert_withdraw_commit(res: &Response, env: &Env) {
     assert_eq!(res.messages.len(), 3, "burn + send + commit");
     let sent = match &res.messages[1].msg {
         CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
@@ -142,7 +142,7 @@ fn assert_withdraw_commit(res: &Response, env: &Env, sub_action: &str) {
         &commit,
         LENDER,
         &sent,
-        &format!("demo-prime:withdraw:{}:{}", LENDER, sub_action),
+        &format!("demo-prime:{}:{}", ACTION, LENDER),
     );
 }
 
@@ -720,7 +720,7 @@ fn withdraw_succeeds_when_require_commit_on_exit_and_commit_funds_true() {
     .expect("withdraw with commit_funds true should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    assert_withdraw_commit(&res, &env, ACTION);
+    assert_withdraw_commit(&res, &env);
 }
 
 #[test]
@@ -771,7 +771,7 @@ fn withdraw_with_commit_funds_true_and_commit_market_id_emits_commit_message() {
     .expect("withdraw should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    assert_withdraw_commit(&res, &env, ACTION);
+    assert_withdraw_commit(&res, &env);
 }
 
 #[test]
@@ -797,7 +797,7 @@ fn withdraw_exact_with_commit_funds_true_emits_commit_message() {
     .expect("withdraw_exact should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    assert_withdraw_commit(&res, &env, ACTION_EXACT);
+    assert_withdraw_commit(&res, &env);
 }
 
 #[test]
@@ -1379,5 +1379,5 @@ fn withdraw_owner_with_commit_funds_true_and_commit_market_id_emits_commit_messa
     .expect("owner withdraw with commit_funds should succeed");
 
     assert_response_lend_borrow_rates_match_reserve(&res, deps.as_ref().storage);
-    assert_withdraw_commit(&res, &env, ACTION);
+    assert_withdraw_commit(&res, &env);
 }

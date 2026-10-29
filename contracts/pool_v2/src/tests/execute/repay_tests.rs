@@ -642,7 +642,7 @@ fn repay_marked_overage_refunds_then_commits() {
         &commit,
         BORROWER,
         &[coin(refund, LENDING_DENOM)],
-        &format!("demo-prime:repay:{}:repay_refund", BORROWER),
+        &format!("demo-prime:repay:{}", BORROWER),
     );
 }
 
@@ -768,7 +768,7 @@ fn repay_marked_overage_worked_example_refunds_then_commits() {
         &commit,
         BORROWER,
         &[coin(950, LENDING_DENOM)],
-        &format!("demo-prime:repay:{}:repay_refund", BORROWER),
+        &format!("demo-prime:repay:{}", BORROWER),
     );
 
     // Plain messages: a failing commit (e.g. missing authz grant) aborts the whole transaction.
