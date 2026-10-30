@@ -80,7 +80,6 @@ pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Con
                 &contract,
                 &env.contract.address,
                 ACTION,
-                "repay_refund",
                 &info.sender,
                 vec![contract.lending_denom.to_prov_coin(excess)],
             )?;

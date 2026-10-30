@@ -118,7 +118,6 @@ pub fn borrow(
             &contract,
             &env.contract.address,
             &ACTION,
-            &ACTION,
             &info.sender,
             vec![contract.lending_denom.to_prov_coin(amount)],
         )?;

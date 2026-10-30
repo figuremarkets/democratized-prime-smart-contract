@@ -147,7 +147,6 @@ pub fn remove_collateral(
             &contract,
             &env.contract.address,
             &ACTION,
-            &ACTION,
             &info.sender,
             recommit_funds,
         )?;
