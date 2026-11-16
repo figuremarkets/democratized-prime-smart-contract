@@ -60,9 +60,6 @@ pub fn sync_directed_sale_after_debt_decrease(
         let Ok(value) = price.value_usd(amount.u128()) else {
             return write_amounts(storage, borrower, clamped, listing.expires_at);
         };
-        if value.is_zero() {
-            return write_amounts(storage, borrower, clamped, listing.expires_at);
-        }
         amount_value_usd.insert(asset_id.clone(), value);
     }
     match scale_to_cap(&clamped, &amount_value_usd, cap_usd) {

@@ -103,7 +103,8 @@ pub fn clamp_to_balances(
 /// `offer_usd` is the sum of those values. When `cap_usd` is at least `offer_usd`,
 /// the same amounts are returned. Otherwise each amount is
 /// `floor(amount * cap_usd / offer_usd)`, and a zero result is dropped.
-/// A missing value, a zero value, or an overflow returns [`ScaleToCap::Unchanged`].
+/// A missing value or an overflow returns [`ScaleToCap::Unchanged`]. A zero
+/// notional is included in the sum.
 pub fn scale_to_cap(
     amounts: &BTreeMap<String, Uint128>,
     amount_value_usd: &BTreeMap<String, Decimal256>,
@@ -118,9 +119,6 @@ pub fn scale_to_cap(
         let Some(value) = amount_value_usd.get(asset_id) else {
             return ScaleToCap::Unchanged;
         };
-        if value.is_zero() {
-            return ScaleToCap::Unchanged;
-        }
         let Some(sum) = offer_usd.checked_add(*value).ok() else {
             return ScaleToCap::Unchanged;
         };
@@ -257,6 +255,16 @@ mod tests {
         assert_eq!(
             scale_to_cap(&amounts, &values, Decimal256::from_str("800").unwrap()),
             ScaleToCap::Scaled(map(&[("a", 100), ("b", 100)]))
+        );
+    }
+
+    #[test]
+    fn scale_to_cap_includes_a_zero_notional_in_the_sum() {
+        let amounts = map(&[("a", 100), ("b", 100)]);
+        let values = usd(&[("a", "200"), ("b", "0")]);
+        assert_eq!(
+            scale_to_cap(&amounts, &values, Decimal256::from_str("100").unwrap()),
+            ScaleToCap::Scaled(map(&[("a", 50), ("b", 50)]))
         );
     }
 
