@@ -30,6 +30,8 @@ pub const ATTRIBUTE_LIQUIDATOR: &str = "liquidator";
 pub const ATTRIBUTE_LIQUIDATION_ACCESS: &str = "liquidation_access";
 /// `"true"` when this Liquidate matched a live directed-sale offer; `"false"` on every classic Liquidate.
 pub const ATTRIBUTE_DIRECTED_SALE: &str = "directed_sale";
+/// Longest `expires_at` after block time accepted when an adjustment increases an amount.
+pub const DIRECTED_SALE_MAX_LIFETIME_SECONDS: u64 = 7 * 24 * 60 * 60;
 /// Deadline of a directed-sale offer, as nanoseconds. `"0"` on cancel.
 pub const ATTRIBUTE_EXPIRES_AT: &str = "expires_at";
 /// Applied signed deltas after clamp (denom -> signed amount string).
