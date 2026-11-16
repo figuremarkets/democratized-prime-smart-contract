@@ -16,10 +16,10 @@ use crate::model::{
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
 use crate::storage::{
-    get_borrower_collateral, get_directed_sale_offer, get_directed_sale_version, get_scaled_borrow,
-    set_directed_sale_offer,
+    get_borrower_collateral, get_directed_sale_offer, get_directed_sale_version,
+    get_reserve_state_v1, get_scaled_borrow, set_directed_sale_offer,
 };
-use crate::tests::fixtures::oracle_price_expired_for;
+use crate::tests::fixtures::{oracle_price_expired_for, stale_oracle_price};
 use crate::tests::query::common::{CUSTODIAN, OWNER};
 use cosmwasm_std::testing::{message_info, mock_env, MockApi};
 use cosmwasm_std::{
@@ -236,6 +236,34 @@ fn set_offer(
         .map(|(k, v)| (k, Int128::from(v.u128() as i128)))
         .collect();
     adjust(deps, env, sender, adjustments, expires_at)
+}
+
+fn repay(
+    deps: &mut Deps,
+    env: &Env,
+    amount: u128,
+) -> Result<cosmwasm_std::Response, ContractError> {
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[coin(amount, LENDING_DENOM)]),
+        ExecuteMsg::Repay {},
+    )
+}
+
+fn borrow_more(
+    deps: &mut Deps,
+    env: &Env,
+    amount: u128,
+) -> Result<cosmwasm_std::Response, ContractError> {
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::Borrow {
+            amount: Uint128::new(amount),
+        },
+    )
 }
 
 fn liquidate(
@@ -705,9 +733,13 @@ fn f7_bonus_cap_still_rejects_directed_fill() {
     set_offer(&mut deps, &env, BORROWER, seize(455), future(&env)).unwrap();
     let err = liquidate(&mut deps, &env, OWNER, 400, seize(455)).unwrap_err();
     illegal_contains(err, "liquidation_bonus_rate");
-    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
-        .unwrap()
-        .is_some());
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(455)
+    );
 }
 
 #[test]
@@ -1007,12 +1039,21 @@ fn c3_partial_does_not_block_later_classic_liquidation() {
     set_oracle_prices(&mut deps.querier, prices_with_collateral("0.75"));
     let res = liquidate(&mut deps, &env, OWNER, 340, seize(455)).expect("classic over remaining");
     assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "false");
+    // Remaining debt 161 at index 1, price 0.75. Cap is 161 * 1.02. Listing USD is
+    // 355 * 0.75. floor(355 * 164.22 / 266.25) = 218. Balance left is 445, so the
+    // clamp does not reduce 355 before that floor.
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .borrow_index,
+        Decimal256::one()
+    );
     assert_eq!(
         get_directed_sale_offer(deps.as_ref().storage, BORROWER)
             .unwrap()
             .unwrap()
             .amounts,
-        seize(355)
+        seize(218)
     );
 }
 
@@ -1057,13 +1098,19 @@ fn c5_expired_offer_does_not_block_classic_liquidation() {
     )
     .unwrap();
     assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "false");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.expires_at, exp);
+    // 3601 seconds later the index has accrued, so a 374 repay removes 373 scaled
+    // units and leaves 227. Ceil payoff is 228. At price 0.83 the listing is worth
+    // 377.65, the cap is 228 * 1.02, and floor(455 * 232.56 / 377.65) = 280.
+    // Collateral left is 545, so the clamp does not reduce 455 before that floor.
     assert_eq!(
-        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
-            .unwrap()
-            .unwrap()
-            .amounts,
-        seize(455)
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        227
     );
+    assert_eq!(stored.amounts, seize(280));
 }
 
 #[test]
@@ -1125,19 +1172,19 @@ fn i1_remove_can_leave_offer_larger_than_balance() {
 }
 
 #[test]
-fn i2_repay_to_zero_leaves_the_offer() {
+fn full_repay_clears_the_offer_and_leaves_the_version() {
     let (mut deps, env) = setup_healthy_borrower();
     set_offer(&mut deps, &env, BORROWER, seize(100), future(&env)).unwrap();
-    execute(
-        deps.as_mut(),
-        env.clone(),
-        message_info(&Addr::unchecked(BORROWER), &[coin(600, LENDING_DENOM)]),
-        ExecuteMsg::Repay {},
-    )
-    .unwrap();
+    let version = get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap();
+    repay(&mut deps, &env, 600).unwrap();
     assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
         .unwrap()
-        .is_some());
+        .is_none());
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        version
+    );
+    assert!(position(&deps, &env).directed_sale_offer.is_none());
     let err = liquidate(&mut deps, &env, OWNER, 1, seize(100)).unwrap_err();
     illegal_contains(err, "no debt");
 }
@@ -1289,12 +1336,21 @@ fn multi_asset_decrease_still_applies_when_one_asset_already_zero() {
 #[test]
 fn decrease_after_full_repay_does_not_require_debt() {
     let (mut deps, env) = setup_healthy_borrower();
-    set_offer(&mut deps, &env, BORROWER, seize(100), future(&env)).unwrap();
-    execute(
-        deps.as_mut(),
-        env.clone(),
-        message_info(&Addr::unchecked(BORROWER), &[coin(600, LENDING_DENOM)]),
-        ExecuteMsg::Repay {},
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(100), exp).unwrap();
+    repay(&mut deps, &env, 600).unwrap();
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+    // The repay deleted the row. Put a listing back so a decrease can still run
+    // when scaled debt is already zero.
+    set_directed_sale_offer(
+        deps.as_mut().storage,
+        BORROWER,
+        &DirectedSaleOfferV1 {
+            amounts: seize(100),
+            expires_at: exp,
+        },
     )
     .unwrap();
     adjust(&mut deps, &env, BORROWER, delta(-40), future(&env)).expect("decrease with no debt");
@@ -1307,4 +1363,209 @@ fn decrease_after_full_repay_does_not_require_debt() {
     );
     let err = adjust(&mut deps, &env, BORROWER, delta(10), future(&env)).unwrap_err();
     illegal_contains(err, "no debt");
+}
+
+#[test]
+fn partial_repay_below_the_cap_keeps_the_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(100), exp).unwrap();
+    let version = get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap();
+    repay(&mut deps, &env, 1).unwrap();
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .borrow_index,
+        Decimal256::one()
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        599
+    );
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.amounts, seize(100));
+    assert_eq!(stored.expires_at, exp);
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        version
+    );
+}
+
+#[test]
+fn partial_repay_above_the_cap_floors_the_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(1000), exp).unwrap();
+    repay(&mut deps, &env, 1).unwrap();
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .borrow_index,
+        Decimal256::one()
+    );
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    // floor(1000 * (599 * 1.02) / 1000) = 610. Collateral balance is 1000, so the clamp is a no-op.
+    assert_eq!(stored.amounts, seize(610));
+    assert_eq!(stored.expires_at, exp);
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        1
+    );
+}
+
+#[test]
+fn repay_with_a_stale_collateral_price_keeps_the_clamped_offer() {
+    let (mut deps, env) = setup_borrower(100, "1.0");
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(800), exp).unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(BORROWER), &[]),
+        ExecuteMsg::RemoveCollateral {
+            to_remove: seize(300),
+        },
+    )
+    .expect("remove stays healthy");
+    let mut prices = HashMap::new();
+    prices.insert(LENDING_DENOM.to_string(), price_entry("1.0"));
+    prices.insert(
+        COLLATERAL_DENOM.to_string(),
+        stale_oracle_price(Decimal256::one(), env.block.time),
+    );
+    set_oracle_prices(&mut deps.querier, prices);
+    repay(&mut deps, &env, 1).unwrap();
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        99
+    );
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    // Balance is 700. The stale collateral price skips the dollar cap, which would
+    // otherwise floor 700 down to the ~101 payoff cap.
+    assert_eq!(stored.amounts, seize(700));
+    assert_eq!(stored.expires_at, exp);
+}
+
+#[test]
+fn borrow_after_full_repay_leaves_no_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(100), exp).unwrap();
+    repay(&mut deps, &env, 600).unwrap();
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+    set_directed_sale_offer(
+        deps.as_mut().storage,
+        BORROWER,
+        &DirectedSaleOfferV1 {
+            amounts: seize(100),
+            expires_at: exp,
+        },
+    )
+    .unwrap();
+    borrow_more(&mut deps, &env, 20).unwrap();
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        20
+    );
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+    let err = liquidate(&mut deps, &env, OWNER, 20, seize(100)).unwrap_err();
+    illegal_contains(err, "not liquidatable");
+    assert_eq!(
+        get_borrower_collateral(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .amounts
+            .get(COLLATERAL_DENOM)
+            .copied(),
+        Some(1000)
+    );
+}
+
+#[test]
+fn larger_borrow_keeps_a_live_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(100), exp).unwrap();
+    borrow_more(&mut deps, &env, 20).unwrap();
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        620
+    );
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.amounts, seize(100));
+    assert_eq!(stored.expires_at, exp);
+}
+
+#[test]
+fn borrow_deletes_an_expired_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_directed_sale_offer(
+        deps.as_mut().storage,
+        BORROWER,
+        &DirectedSaleOfferV1 {
+            amounts: seize(100),
+            expires_at: env.block.time,
+        },
+    )
+    .unwrap();
+    borrow_more(&mut deps, &env, 20).unwrap();
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        620
+    );
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn rejected_borrow_keeps_an_expired_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = env.block.time;
+    set_directed_sale_offer(
+        deps.as_mut().storage,
+        BORROWER,
+        &DirectedSaleOfferV1 {
+            amounts: seize(100),
+            expires_at: exp,
+        },
+    )
+    .unwrap();
+    let err = borrow_more(&mut deps, &env, 500).unwrap_err();
+    illegal_contains(err, "Loan-to-value");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.amounts, seize(100));
+    assert_eq!(stored.expires_at, exp);
+}
+
+#[test]
+fn directed_fill_of_a_subset_applies_the_cap_to_what_remains() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = future(&env);
+    set_offer(&mut deps, &env, BORROWER, seize(1000), exp).unwrap();
+    let res = liquidate(&mut deps, &env, OWNER, 99, seize(100)).expect("subset");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "true");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .unwrap();
+    // Seize 100 leaves 900. Debt payoff is 501. floor(900 * (501 * 1.02) / 900) = 511.
+    assert_eq!(stored.amounts, seize(511));
+    assert_eq!(stored.expires_at, exp);
+    assert_eq!(
+        get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
+        1
+    );
 }

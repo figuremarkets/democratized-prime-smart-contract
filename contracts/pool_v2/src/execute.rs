@@ -1,6 +1,7 @@
 pub mod add_collateral;
 pub mod adjust_directed_collateral_sale;
 pub mod borrow;
+pub mod directed_sale_sync;
 pub mod eliminate_deficit;
 pub mod lend;
 pub mod liquidate;

@@ -55,8 +55,12 @@
 //! **Directed sale:** a live offer whose outstanding map contains `collateral_to_seize`
 //! (non-empty, every amount ≤ the offer) skips only the pre-state liquidatable gate and the
 //! load-bearing half of the owner gate. The write-off sweep, bonus cap, and post-state health
-//! check still apply. An empty seize never matches an offer. A successful directed fill
-//! subtracts the seized amounts; the row is cleared when nothing remains.
+//! check still apply. An empty seize never matches an offer. The match uses the offer
+//! from the start of the call. After debt and collateral are saved, scaled debt of 0
+//! clears the row. Otherwise a directed fill starts from the offer minus the seize, and
+//! every other successful call starts from the original offer; both are clamped to the
+//! collateral just saved and shrunk to the fresh-price payoff cap. An oversized seize
+//! fails the value band and reverts, so the stored offer is unchanged.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
 //! directed-fill match → liquidatable (unless directed) → lending price → sent funds and scaled repay → per-asset checks and dry-run
@@ -64,7 +68,7 @@
 //! sweep unpriceable collateral) → solvent write-off guard (priced market value must be below
 //! the debt payoff) → value band (100% floor waived on `bad_debt`, or a full
 //! repay that seizes nothing) → post-state
-//! health → persist reserve, sweep the remainder on `bad_debt`, collateral, shrink or clear offer on directed fill → response
+//! health → persist reserve, sweep the remainder on `bad_debt`, collateral, clamp and cap any stored offer → response
 //! (collateral send + attrs) → refund excess lending.
 //!
 //! **Bad debt:** `bad_debt_loss_allocation` on contract state chooses **deferred** (`deficit_underlying`)
@@ -76,17 +80,17 @@ use crate::constants::{
     ATTRIBUTE_DEFICIT_UNDERLYING, ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_LIQUIDATION_ACCESS,
     ATTRIBUTE_LIQUIDATOR, ATTRIBUTE_SCALED_AMOUNT, ATTRIBUTE_SWEPT_COLLATERAL_JSON,
 };
-use crate::model::directed_sale::{
-    is_live, is_seize_within_offer, subtract_seize, DirectedSaleOfferV1,
+use crate::execute::directed_sale_sync::{
+    sync_directed_sale_after_debt_decrease, ListingAfterDebt,
 };
+use crate::model::directed_sale::{is_live, is_seize_within_offer, subtract_seize};
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
 use crate::model::BorrowerCollateralV1;
 use crate::model::{BadDebtLossAllocation, ContractStateV1, LiquidationAccess};
 use crate::storage::{
-    clear_directed_sale_offer, get_borrower_collateral, get_contract_state_v1,
-    get_directed_sale_offer, get_scaled_borrow, set_borrower_collateral, set_directed_sale_offer,
-    set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
+    get_borrower_collateral, get_contract_state_v1, get_directed_sale_offer, get_scaled_borrow,
+    set_borrower_collateral, set_reserve_state_v1, set_scaled_borrow, subtract_total_collateral,
 };
 use crate::utils::{
     apply_pro_rata_liquidity_index_haircut, assert_liquidator,
@@ -492,22 +496,28 @@ pub fn liquidate(
         post_collateral
     };
     set_borrower_collateral(deps.storage, borrower_key, &stored_collateral)?;
-    if directed_fill {
-        if let Some(offer) = stored_offer {
-            let remaining = subtract_seize(&offer.amounts, collateral_to_seize);
-            if remaining.is_empty() {
-                clear_directed_sale_offer(deps.storage, borrower_key)?;
-            } else {
-                set_directed_sale_offer(
-                    deps.storage,
-                    borrower_key,
-                    &DirectedSaleOfferV1 {
-                        amounts: remaining,
-                        expires_at: offer.expires_at,
-                    },
-                )?;
-            }
-        }
+    // The seize was matched against `stored_offer` before the band check. Shrink only
+    // the listing that survived that check, against the collateral and debt just saved.
+    if let Some(offer) = stored_offer {
+        let basis = if directed_fill {
+            subtract_seize(&offer.amounts, collateral_to_seize)
+        } else {
+            offer.amounts
+        };
+        let saved_scaled = if bad_debt { 0 } else { new_scaled_debt };
+        sync_directed_sale_after_debt_decrease(
+            deps.storage,
+            &deps.querier,
+            env.block.time,
+            &contract,
+            borrower_key,
+            ListingAfterDebt {
+                new_scaled: saved_scaled,
+                borrow_index: reserve.borrow_index,
+                basis,
+                expires_at: offer.expires_at,
+            },
+        )?;
     }
 
     let send_coins: Vec<Coin> = outgoing
