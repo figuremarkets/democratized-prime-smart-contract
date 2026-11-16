@@ -1,11 +1,13 @@
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BORROWER, ATTRIBUTE_SCALED_AMOUNT,
 };
+use crate::model::directed_sale::is_live;
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
 use crate::response::new_commit_message;
 use crate::storage::{
-    get_borrower_collateral, get_borrower_require_commit, get_contract_state_v1, get_scaled_borrow,
-    set_reserve_state_v1, set_scaled_borrow,
+    clear_directed_sale_offer, get_borrower_collateral, get_borrower_require_commit,
+    get_contract_state_v1, get_directed_sale_offer, get_scaled_borrow, set_reserve_state_v1,
+    set_scaled_borrow,
 };
 use crate::utils::{
     debt_after_borrow, get_asset_prices_for_borrower, get_borrower_health,
@@ -66,6 +68,8 @@ pub fn borrow(
     );
 
     let current_scaled = get_scaled_borrow(deps.storage, info.sender.as_str())?;
+    // Snapshot before the debt increases. A rejected borrow returns before the clear below.
+    let stored_offer = get_directed_sale_offer(deps.storage, info.sender.as_str())?;
     // LTV uses floored recorded debt. Using current_underlying + amount would understate it
     // (ceil on mint) and could allow a borrow slightly above margin_rate.
     let (scaled_delta, new_scaled, debt_after_u128) =
@@ -86,6 +90,14 @@ pub fn borrow(
         debt_after,
     )?;
     validate_borrower_is_healthy(health, loan_to_value, &contract)?;
+
+    // A new loan, or an offer already at or past its deadline, is deleted. A live
+    // offer on an open loan keeps its amounts and expires_at; the listing does not grow.
+    if let Some(offer) = stored_offer.as_ref() {
+        if current_scaled == 0 || !is_live(offer, env.block.time) {
+            clear_directed_sale_offer(deps.storage, info.sender.as_str())?;
+        }
+    }
 
     set_scaled_borrow(deps.storage, info.sender.as_str(), new_scaled)?;
 

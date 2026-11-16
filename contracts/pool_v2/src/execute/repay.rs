@@ -1,11 +1,14 @@
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_BORROWER, ATTRIBUTE_SCALED_AMOUNT,
 };
+use crate::execute::directed_sale_sync::{
+    sync_directed_sale_after_debt_decrease, ListingAfterDebt,
+};
 use crate::model::error::{illegal_argument, illegal_state, ContractError};
 use crate::response::new_commit_message;
 use crate::storage::{
-    get_borrower_require_commit, get_contract_state_v1, get_scaled_borrow, set_reserve_state_v1,
-    set_scaled_borrow,
+    clear_directed_sale_offer, get_borrower_require_commit, get_contract_state_v1,
+    get_directed_sale_offer, get_scaled_borrow, set_reserve_state_v1, set_scaled_borrow,
 };
 use crate::utils::{
     scaled_to_underlying_borrow_ceil, underlying_to_scaled_borrow, update_reserve_indexes,
@@ -55,6 +58,27 @@ pub fn repay(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Con
         .checked_sub(scaled_repay)
         .ok_or_else(|| illegal_state("underflow: total_scaled_borrow - scaled_repay"))?;
     set_reserve_state_v1(deps.storage, &reserve)?;
+
+    // A closed loan deletes the listing. A smaller loan clamps it to collateral still
+    // held, then shrinks it when fresh prices put the listing above the payoff cap.
+    // A price or math failure keeps the clamped amounts. The repay response is unchanged.
+    if new_scaled == 0 {
+        clear_directed_sale_offer(deps.storage, info.sender.as_str())?;
+    } else if let Some(offer) = get_directed_sale_offer(deps.storage, info.sender.as_str())? {
+        sync_directed_sale_after_debt_decrease(
+            deps.storage,
+            &deps.querier,
+            env.block.time,
+            &contract,
+            info.sender.as_str(),
+            ListingAfterDebt {
+                new_scaled,
+                borrow_index: reserve.borrow_index,
+                basis: offer.amounts,
+                expires_at: offer.expires_at,
+            },
+        )?;
+    }
 
     let mut res = Response::new()
         .add_attribute(ATTRIBUTE_ACTION_NAME, ACTION)
