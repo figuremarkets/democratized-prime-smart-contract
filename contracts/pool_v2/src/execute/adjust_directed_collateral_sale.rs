@@ -3,7 +3,7 @@
 
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_BORROWER, ATTRIBUTE_EXPIRES_AT,
-    ATTRIBUTE_VERSION,
+    ATTRIBUTE_VERSION, DIRECTED_SALE_MAX_LIFETIME_SECONDS,
 };
 use crate::model::directed_sale::DirectedSaleOfferV1;
 use crate::model::error::{illegal_argument, illegal_state, invalid_funds, ContractError};
@@ -52,6 +52,15 @@ pub fn adjust_directed_collateral_sale(
         ensure!(
             expires_at > env.block.time,
             illegal_argument("expires_at must be in the future")
+        );
+        ensure!(
+            expires_at.nanos()
+                <= env
+                    .block
+                    .time
+                    .plus_seconds(DIRECTED_SALE_MAX_LIFETIME_SECONDS)
+                    .nanos(),
+            illegal_argument("expires_at must be at most 7 days after block time")
         );
         let scaled = get_scaled_borrow(deps.storage, borrower)?;
         ensure!(

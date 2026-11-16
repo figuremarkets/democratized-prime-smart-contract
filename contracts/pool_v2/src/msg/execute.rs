@@ -67,9 +67,11 @@ pub enum ExecuteMsg {
 
     /// Adjust the sender's outstanding directed collateral sale. Positive amounts add to the
     /// live invitation; negative amounts subtract and clamp at zero per asset. An empty
-    /// `adjustments` map (or all zeros) cancels and ignores `expires_at`. `version` must equal
-    /// the stored nonce plus one (query `directed_sale_version`). Fill is `Liquidate` with a
-    /// non-empty subset of the unexpired outstanding map, which skips the pre-state liquidatable gate.
+    /// `adjustments` map (or all zeros) cancels and ignores `expires_at`. An increase requires
+    /// `expires_at` strictly after block time and at most 7 days after it, and replaces the
+    /// stored deadline. A decrease ignores `expires_at` and keeps the stored deadline. `version`
+    /// must equal the stored nonce plus one (query `directed_sale_version`). Fill is `Liquidate`
+    /// with a non-empty subset of the unexpired outstanding map, which skips the pre-state liquidatable gate.
     AdjustDirectedCollateralSale {
         adjustments: BTreeMap<String, Int128>,
         expires_at: Timestamp,

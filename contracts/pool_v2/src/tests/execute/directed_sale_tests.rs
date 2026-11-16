@@ -2,7 +2,7 @@
 
 use crate::constants::{
     ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_EXPIRES_AT,
-    ATTRIBUTE_SWEPT_COLLATERAL_JSON, ATTRIBUTE_VERSION,
+    ATTRIBUTE_SWEPT_COLLATERAL_JSON, ATTRIBUTE_VERSION, DIRECTED_SALE_MAX_LIFETIME_SECONDS,
 };
 use crate::contract::{execute, query};
 use crate::execute::adjust_directed_collateral_sale::ACTION;
@@ -10,12 +10,14 @@ use crate::execute::liquidate::{ASSERT_LIQUIDATOR_ERR, ASSERT_OWNER_UNPRICEABLE_
 use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{
-    BadDebtLossAllocation, BorrowerPositionResponseV1, CollateralAssetV1, Denom, LiquidationAccess,
-    RateParamsV1, DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
+    BadDebtLossAllocation, BorrowerPositionResponseV1, CollateralAssetV1, Denom,
+    DirectedSaleOfferV1, LiquidationAccess, RateParamsV1,
+    DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
 use crate::storage::{
     get_borrower_collateral, get_directed_sale_offer, get_directed_sale_version, get_scaled_borrow,
+    set_directed_sale_offer,
 };
 use crate::tests::fixtures::oracle_price_expired_for;
 use crate::tests::query::common::{CUSTODIAN, OWNER};
@@ -403,6 +405,98 @@ fn o5_o6_set_rejects_invalid_offers_and_zero_map_cancels() {
     assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn increase_at_exactly_seven_days_is_stored() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let exp = env
+        .block
+        .time
+        .plus_seconds(DIRECTED_SALE_MAX_LIFETIME_SECONDS);
+    set_offer(&mut deps, &env, BORROWER, seize(100), exp).expect("increase");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .expect("stored");
+    assert_eq!(stored.amounts, seize(100));
+    assert_eq!(stored.expires_at, exp);
+}
+
+#[test]
+fn increase_one_second_past_seven_days_is_rejected() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let too_far = env
+        .block
+        .time
+        .plus_seconds(DIRECTED_SALE_MAX_LIFETIME_SECONDS + 1);
+    let err = set_offer(&mut deps, &env, BORROWER, seize(100), too_far).unwrap_err();
+    match err {
+        ContractError::IllegalArgumentError { message } => {
+            assert!(message.contains("expires_at"), "message: {}", message);
+            assert!(message.contains("7 days"), "message: {}", message);
+        }
+        other => panic!("expected IllegalArgumentError, got {:?}", other),
+    }
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn increase_at_block_time_or_zero_fails_the_future_check() {
+    let (mut deps, env) = setup_healthy_borrower();
+    for expires_at in [env.block.time, Timestamp::from_nanos(0)] {
+        let err = set_offer(&mut deps, &env, BORROWER, seize(100), expires_at).unwrap_err();
+        match err {
+            ContractError::IllegalArgumentError { message } => {
+                assert_eq!(message, "expires_at must be in the future");
+            }
+            other => panic!("expected IllegalArgumentError, got {:?}", other),
+        }
+    }
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn legacy_offer_past_seven_days_keeps_deadline_on_decrease_then_increase_replaces_it() {
+    let (mut deps, env) = setup_healthy_borrower();
+    let legacy = env.block.time.plus_seconds(30 * 24 * 60 * 60);
+    set_directed_sale_offer(
+        deps.as_mut().storage,
+        BORROWER,
+        &DirectedSaleOfferV1 {
+            amounts: seize(400),
+            expires_at: legacy,
+        },
+    )
+    .unwrap();
+
+    adjust(
+        &mut deps,
+        &env,
+        BORROWER,
+        delta(-100),
+        Timestamp::from_nanos(0),
+    )
+    .expect("decrease");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .expect("stored");
+    assert_eq!(stored.amounts, seize(300));
+    assert_eq!(stored.expires_at, legacy);
+
+    let seven = env
+        .block
+        .time
+        .plus_seconds(DIRECTED_SALE_MAX_LIFETIME_SECONDS);
+    adjust(&mut deps, &env, BORROWER, delta(100), seven).expect("increase");
+    let stored = get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .expect("stored");
+    assert_eq!(stored.amounts, seize(400));
+    assert_eq!(stored.expires_at, seven);
 }
 
 #[test]
