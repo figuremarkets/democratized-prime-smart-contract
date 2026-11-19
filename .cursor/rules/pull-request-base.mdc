@@ -1,0 +1,32 @@
+---
+description: Pull request base branch when several repositories are checked out together
+alwaysApply: true
+---
+
+Create the branch, and open the pull request, against the default branch of the repository you are changing. Do not reuse another repository's default branch.
+
+Before `git checkout -b` and before `gh pr create`, in that repository:
+
+1. Run `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
+2. Create the branch from that ref.
+3. Pass that ref as `--base`.
+
+If the user names a base branch, use that branch instead.
+
+These repositories default to `develop`:
+
+- `service-hft-exchange`
+- `service-broker-dealer-notification`
+- `service-broker-dealer-profile`
+
+These repositories default to `main`:
+
+- `lending-services`
+- `proto-ats`
+- `democratized-prime-smart-contract`
+- `event-exchange-smart-contract`
+- `exchange-ops`
+
+The command above wins if it disagrees with this list.
+
+For `service-hft-exchange`, `service-broker-dealer-notification`, and `service-broker-dealer-profile`, target `main` only when the user explicitly asks for a pull request to `main`. Otherwise `main` is updated by `.github/workflows/create_production_release.yml` (`prod-name: main`).
