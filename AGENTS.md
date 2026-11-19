@@ -55,3 +55,20 @@ Everything committed here is public. Comments and documentation describe the cod
 - Report known defects and exploit conditions privately, following `.github/SECURITY.md`.
 - Shortcut ids and links appear only in branch names, commit subjects, pull request titles, and the trailing `Shortcut:` line.
 - Keep discussion notes, audit reproductions, and unpublished findings out of the repository. Published audits stay (`contracts/repo_token_cw20/CW20_AUDIT.md`).
+
+## Pull request base
+
+The pull request base is the branch this branch was started from.
+
+- New work starts from the default branch:
+  `base=$(gh repo view figuremarkets/democratized-prime-smart-contract --json defaultBranchRef --jq .defaultBranchRef.name)`
+  `git fetch origin && git checkout -b <branch> "origin/$base"`
+- Work that builds on an unmerged branch (the user says so, or the change needs its commits) starts from that parent. The parent must be on origin with its own open pull request, or stop and ask:
+  `git ls-remote --exit-code --heads origin <parent>`
+  `git checkout -b <branch> <parent> && git config branch.<branch>.gh-merge-base <parent>`
+  `base=<parent>`
+- A base the user names wins. Use it as the branch start and as `--base`.
+- Always pass the base: `gh pr create --base "$base"`. Without `--base`, `gh` falls back to the default branch.
+- If `gh pr view` finds a pull request for this branch, push to it. Do not open another.
+- Parent unknown: check `git config branch.<branch>.gh-merge-base`, then `git reflog show <branch> | tail -1`. Otherwise ask. Wrong base: `gh pr edit <number> --base <parent>`.
+- After the parent pull request merges, check this pull request's base and diff and tell the user. GitHub may retarget it when the merged head branch is deleted. Rebase only when the user asks.
