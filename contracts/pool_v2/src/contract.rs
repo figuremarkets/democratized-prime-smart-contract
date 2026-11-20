@@ -97,7 +97,15 @@ pub fn execute(
         ExecuteMsg::Liquidate {
             borrower,
             collateral_to_seize,
-        } => liquidate(deps, env, info, borrower, &collateral_to_seize),
+            min_collateral_out,
+        } => liquidate(
+            deps,
+            env,
+            info,
+            borrower,
+            &collateral_to_seize,
+            min_collateral_out.as_ref(),
+        ),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,

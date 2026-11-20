@@ -160,6 +160,23 @@ fn liquidate_json_deserializes() {
         ExecuteMsg::Liquidate {
             borrower: "tp1borrowerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(),
             collateral_to_seize,
+            min_collateral_out: None,
+        },
+    );
+}
+
+#[test]
+fn liquidate_min_collateral_out_json_deserializes() {
+    let mut collateral_to_seize = BTreeMap::new();
+    collateral_to_seize.insert("asset.one".to_string(), Uint128::new(50));
+    let mut min_collateral_out = BTreeMap::new();
+    min_collateral_out.insert("asset.one".to_string(), Uint128::new(40));
+    assert_json_deserializes(
+        r#"{"liquidate":{"borrower":"tp1borrowerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","collateral_to_seize":{"asset.one":"50"},"min_collateral_out":{"asset.one":"40"}}}"#,
+        ExecuteMsg::Liquidate {
+            borrower: "tp1borrowerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(),
+            collateral_to_seize,
+            min_collateral_out: Some(min_collateral_out),
         },
     );
 }

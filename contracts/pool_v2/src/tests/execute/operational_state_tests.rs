@@ -617,6 +617,7 @@ fn paused_blocks_liquidate() {
         ExecuteMsg::Liquidate {
             borrower: "tp1q8n4v4m0hm8v0a7n697nwtpzhfsz3f4d40lnsu".to_string(),
             collateral_to_seize,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();

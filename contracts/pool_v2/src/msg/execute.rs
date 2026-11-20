@@ -90,11 +90,23 @@ pub enum ExecuteMsg {
     /// pre-seizure priced collateral market value below the debt payoff; otherwise emptying the
     /// map requires the full payoff. A write-off sweeps every
     /// remaining collateral unit to the liquidator. A full repay leaves that collateral in place.
+    ///
+    /// When `min_collateral_out` is set, `collateral_to_seize` is a maximum. The repayment is
+    /// `min(sent, debt payoff, floor of the signed basket in lending denom)`, and each signed
+    /// amount is scaled by one ratio so the basket is worth at most that repayment times
+    /// `liquidation_bonus_rate`. A final amount below its minimum cancels the fill. Omitting
+    /// the field leaves the repay and the seize as they are without it.
     Liquidate {
         borrower: String,
         /// Asset id -> amount to seize from the borrower. Market value (display_price_usd × amount / 10^precision) must be in [100%, liquidation_bonus_rate] of amount repaid.
         /// Empty (or all zeros) is allowed only when nothing priceable is held: a partial repay writes the residual off and sweeps, and a full repay leaves the collateral with the borrower.
+        /// When `min_collateral_out` is set, these amounts are the maximum, and the executed seize may be smaller.
         collateral_to_seize: BTreeMap<String, Uint128>,
+        /// Per-asset minimum the liquidator will accept, in base units. When this field is
+        /// present, the fit rule runs. A missing key counts as zero. When it is absent,
+        /// `Liquidate` does not scale the seize.
+        #[serde(default)]
+        min_collateral_out: Option<BTreeMap<String, Uint128>>,
     },
 
     /// Update supported collateral assets (contract owner).

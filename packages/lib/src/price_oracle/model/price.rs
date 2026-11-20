@@ -161,6 +161,33 @@ impl AssetPriceResponseV1 {
             .map_err(|_| ContractError::AmountNotRepresentable)
     }
 
+    /// Floor of the base-unit amount whose notional is `value` USD:
+    /// `floor(value * 10^precision / display_price_usd)`.
+    ///
+    /// [`Self::amount_from_usd`] ceils that same quotient. Liquidation uses this floor
+    /// so a signed basket's lending-denom value never exceeds its USD notional.
+    pub fn amount_from_usd_floor(&self, value: Decimal256) -> Result<u128, ContractError> {
+        let (display, precision) = self.valuation_inputs();
+        if value.is_zero() {
+            return Ok(0);
+        }
+        ensure!(!display.is_zero(), illegal_argument("Asset price is zero"));
+        let scale = Uint256::from(10u64)
+            .checked_pow(precision)
+            .map_err(|_| overflow("Price precision overflow"))?;
+        let numerator = value
+            .atomics()
+            .checked_mul(scale)
+            .map_err(|_| overflow("amount from USD overflow"))?;
+        let denominator = display.atomics();
+        let quot = numerator
+            .checked_div(denominator)
+            .expect("display non-zero so atomics non-zero");
+        Uint128::try_from(quot)
+            .map(|u| u.u128())
+            .map_err(|_| ContractError::AmountNotRepresentable)
+    }
+
     /// Smallest base-unit amount whose **haircutted** notional covers `value` USD, i.e. the
     /// least `a` with `value_usd(a) * haircut >= value` as the consumer computes it.
     ///
@@ -274,6 +301,18 @@ mod tests {
             expiration_epoch_seconds: 1,
         };
         assert_eq!(p.value_usd(1_000_000_000_000_000_000).unwrap(), dec("0.5"));
+    }
+
+    #[test]
+    fn amount_from_usd_floor_drops_the_remainder() {
+        let one = AssetPriceResponseV1::new(dec("1"), 0, 1);
+        assert_eq!(one.amount_from_usd_floor(dec("550.8")).unwrap(), 550);
+        assert_eq!(one.amount_from_usd(dec("550.8")).unwrap(), 551);
+        assert_eq!(one.amount_from_usd_floor(dec("550")).unwrap(), 550);
+
+        let two = AssetPriceResponseV1::new(dec("2"), 0, 1);
+        assert_eq!(two.amount_from_usd_floor(dec("5")).unwrap(), 2);
+        assert_eq!(two.amount_from_usd(dec("5")).unwrap(), 3);
     }
 
     #[test]
