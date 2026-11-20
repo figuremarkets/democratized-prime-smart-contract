@@ -151,14 +151,24 @@ pub(crate) struct LiquidationPreview<'a> {
     pub borrower: &'a str,
     pub signed_seize: &'a BTreeMap<String, Uint128>,
     pub min_collateral_out: Option<&'a BTreeMap<String, Uint128>>,
-    pub sent_u128: u128,
+    /// Attached coins for `Liquidate`, or the numeric `sent` on the quote.
+    pub sent: PreviewSent<'a>,
     /// Runs the permissionless owner gate when set. The quote leaves this empty.
     pub owner_sender: Option<&'a Addr>,
+}
+
+/// Where the lending amount comes from. The coin check stays at the same point in
+/// the shared checks as `Liquidate` used before the quote existed.
+#[derive(Clone, Copy)]
+pub(crate) enum PreviewSent<'a> {
+    Attached(&'a MessageInfo),
+    Amount(u128),
 }
 
 pub(crate) struct PreviewedLiquidation {
     pub borrower_key: String,
     pub debt_payoff: u128,
+    pub sent_u128: u128,
     pub actual_repay_underlying: u128,
     pub scaled_repay: u128,
     pub new_scaled_debt: u128,
@@ -191,7 +201,7 @@ pub(crate) fn preview_liquidation(
         borrower,
         signed_seize: collateral_to_seize,
         min_collateral_out,
-        sent_u128,
+        sent,
         owner_sender,
     } = *input;
     let borrower_addr = api.addr_validate(borrower.trim())?;
@@ -262,6 +272,14 @@ pub(crate) fn preview_liquidation(
 
     // ---------- 5. Attached lending funds; fit; actual repay and scaled repay ----------
     // Only a non-zero amount is required; how much is *enough* is decided by post-state health.
+    // The coin check stays here, after the liquidatable gate, so an earlier rejection
+    // still wins when the attached funds are also wrong.
+    let sent_u128 = match sent {
+        PreviewSent::Attached(info) => {
+            validate_single_coin_denom(info, &contract.lending_denom, Uint128::one())?.u128()
+        }
+        PreviewSent::Amount(amount) => amount,
+    };
     // LTV/health use floor debt; cancelling all scaled units requires and collects ceil(s · bi).
     // The directed-fill flag above used the signed map. The fit may shrink both the seize
     // and the repayment; it does not recompute that flag.
@@ -519,6 +537,7 @@ pub(crate) fn preview_liquidation(
     Ok(PreviewedLiquidation {
         borrower_key: borrower_key.to_string(),
         debt_payoff,
+        sent_u128,
         actual_repay_underlying,
         scaled_repay,
         new_scaled_debt,
@@ -552,9 +571,8 @@ pub fn liquidate(
     ) {
         assert_liquidator(&contract, &info.sender, ASSERT_LIQUIDATOR_ERR)?;
     }
+    let borrower_addr = deps.api.addr_validate(borrower.trim())?;
     let mut reserve = update_reserve_indexes(deps.storage, &env, &contract.rate_params)?;
-    let sent_u128 =
-        validate_single_coin_denom(&info, &contract.lending_denom, Uint128::one())?.u128();
     let plan = preview_liquidation(&LiquidationPreview {
         storage: deps.storage,
         querier: &deps.querier,
@@ -562,14 +580,15 @@ pub fn liquidate(
         api: deps.api,
         contract: &contract,
         borrow_index: reserve.borrow_index,
-        borrower: &borrower,
+        borrower: borrower_addr.as_str(),
         signed_seize: collateral_to_seize,
         min_collateral_out,
-        sent_u128,
+        sent: PreviewSent::Attached(&info),
         owner_sender: Some(&info.sender),
     })?;
     let borrower_key_owned = plan.borrower_key;
     let borrower_key = borrower_key_owned.as_str();
+    let sent_u128 = plan.sent_u128;
     let actual_repay_underlying = plan.actual_repay_underlying;
     let scaled_repay = plan.scaled_repay;
     let new_scaled_debt = plan.new_scaled_debt;

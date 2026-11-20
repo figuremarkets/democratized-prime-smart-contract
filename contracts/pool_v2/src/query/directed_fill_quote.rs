@@ -3,7 +3,7 @@
 //! Indexes are accrued in memory. Nothing is stored. `LiquidationAccess` and the
 //! permissionless owner gate are not applied.
 
-use crate::execute::liquidate::{preview_liquidation, LiquidationPreview};
+use crate::execute::liquidate::{preview_liquidation, LiquidationPreview, PreviewSent};
 use crate::model::DirectedFillQuoteResponseV1;
 use crate::model::QueryError;
 use crate::storage::get_contract_state_v1;
@@ -31,7 +31,7 @@ pub fn query_directed_fill_quote(
         borrower: &borrower,
         signed_seize: collateral_to_seize,
         min_collateral_out,
-        sent_u128: sent.u128(),
+        sent: PreviewSent::Amount(sent.u128()),
         owner_sender: None,
     })?;
     let response = DirectedFillQuoteResponseV1 {
