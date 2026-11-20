@@ -12,7 +12,7 @@ use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{
     BadDebtLossAllocation, BorrowerPositionResponseV1, CollateralAssetV1, Denom,
-    DirectedSaleOfferV1, LiquidationAccess, RateParamsV1,
+    DirectedFillQuoteResponseV1, DirectedSaleOfferV1, LiquidationAccess, RateParamsV1,
     DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
@@ -1834,5 +1834,67 @@ fn classic_liquidation_with_min_collateral_out_scales_on_a_price_rise() {
     assert_eq!(
         get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
         0
+    );
+}
+
+#[test]
+fn quote_price_rise_returns_306_and_leaves_the_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("2.0"));
+    let bin = query(
+        deps.as_ref(),
+        env.clone(),
+        QueryMsg::GetDirectedFillQuote {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize(612),
+            sent: Uint128::new(600),
+            min_collateral_out: Some(mins(&[(COLLATERAL_DENOM, 300)])),
+        },
+    )
+    .expect("quote");
+    let quoted: DirectedFillQuoteResponseV1 = from_json(bin).unwrap();
+    assert_eq!(quoted.collateral_to_seize, seize(306));
+    assert_eq!(quoted.actual_repay_underlying, Uint128::new(600));
+    assert_eq!(quoted.refund, Uint128::zero());
+    assert_eq!(quoted.debt_payoff, Uint128::new(600));
+    assert!(quoted.directed_fill);
+    assert_eq!(
+        position(&deps, &env).directed_sale_offer.unwrap().amounts,
+        seize(612)
+    );
+}
+
+#[test]
+fn quote_below_minimum_matches_the_liquidate_error() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("3"));
+    let quote_err = query(
+        deps.as_ref(),
+        env.clone(),
+        QueryMsg::GetDirectedFillQuote {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize(612),
+            sent: Uint128::new(600),
+            min_collateral_out: Some(mins(&[(COLLATERAL_DENOM, 250)])),
+        },
+    )
+    .unwrap_err();
+    let liquidate_err = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(612),
+        mins(&[(COLLATERAL_DENOM, 250)]),
+    )
+    .unwrap_err();
+    assert_eq!(quote_err.to_string(), liquidate_err.to_string());
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(612)
     );
 }

@@ -6,10 +6,11 @@
 use crate::model::directed_sale::DirectedSaleOfferV1;
 use crate::model::health::BorrowerHealthResponseV1;
 use crate::model::{error::ContractError, Denom, ReserveStateV1};
-use cosmwasm_std::{Timestamp, Uint128};
+use cosmwasm_std::{Decimal256, Timestamp, Uint128};
 use result_extensions::ResultExtensions;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::str::FromStr;
 
@@ -196,6 +197,21 @@ pub struct CollateralRequirementsResponseV1 {
 pub struct BorrowerStatusResponseV1 {
     /// When true, this borrower is marked require-commit.
     pub require_commit: bool,
+}
+
+/// Read-only quote of a `Liquidate` that does not check who may liquidate and does not write.
+/// Amounts are lending-denom or collateral base units. USD fields are market value, no haircut.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct DirectedFillQuoteResponseV1 {
+    pub debt_payoff: Uint128,
+    pub actual_repay_underlying: Uint128,
+    pub refund: Uint128,
+    /// Final seize after the execution-price fit. This is the map `Liquidate` would debit.
+    pub collateral_to_seize: BTreeMap<String, Uint128>,
+    pub seized_value_usd: Decimal256,
+    pub min_collateral_value_required: Decimal256,
+    pub max_collateral_value_allowed: Decimal256,
+    pub directed_fill: bool,
 }
 
 /// Response for the GetLenderStatus query. Supply balance comes from repo_token_cw20 Balance (and TokenInfo) query.

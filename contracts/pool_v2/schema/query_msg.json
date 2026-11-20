@@ -109,6 +109,45 @@
       "additionalProperties": false
     },
     {
+      "description": "Quote a `Liquidate` with no writes and no check of who may liquidate. `sent` is the lending-denom amount that would be attached. `min_collateral_out` is the same opt-in fit as `Liquidate`: present, `collateral_to_seize` is a maximum. A rejection uses the same error string as `Liquidate`. Indexes are the effective reserve, accrued in memory the way `GetBorrowerPosition` does.",
+      "type": "object",
+      "required": [
+        "get_directed_fill_quote"
+      ],
+      "properties": {
+        "get_directed_fill_quote": {
+          "type": "object",
+          "required": [
+            "borrower",
+            "collateral_to_seize",
+            "sent"
+          ],
+          "properties": {
+            "borrower": {
+              "type": "string"
+            },
+            "collateral_to_seize": {
+              "type": "object",
+              "additionalProperties": false
+            },
+            "min_collateral_out": {
+              "default": null,
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false
+            },
+            "sent": {
+              "$ref": "#/definitions/Uint128"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
       "description": "Lender status: whether this address must pass commit_funds when withdrawing (per-address require commit on exit). Underlying lent position comes from the repo_token_cw20 **Balance** query, not this contract.",
       "type": "object",
       "required": [
