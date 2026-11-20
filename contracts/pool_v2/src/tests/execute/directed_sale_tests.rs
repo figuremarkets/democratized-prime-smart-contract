@@ -1,8 +1,9 @@
 //! Directed collateral sales: one offer per borrower, filled by a subset `Liquidate`.
 
 use crate::constants::{
-    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_DIRECTED_SALE, ATTRIBUTE_EXPIRES_AT,
-    ATTRIBUTE_SWEPT_COLLATERAL_JSON, ATTRIBUTE_VERSION, DIRECTED_SALE_MAX_LIFETIME_SECONDS,
+    ATTRIBUTE_ACTION_NAME, ATTRIBUTE_AMOUNT, ATTRIBUTE_APPLIED_JSON, ATTRIBUTE_DIRECTED_SALE,
+    ATTRIBUTE_EXPIRES_AT, ATTRIBUTE_SWEPT_COLLATERAL_JSON, ATTRIBUTE_VERSION,
+    DIRECTED_SALE_MAX_LIFETIME_SECONDS,
 };
 use crate::contract::{execute, query};
 use crate::execute::adjust_directed_collateral_sale::ACTION;
@@ -11,7 +12,7 @@ use crate::instantiate::instantiate_contract;
 use crate::model::error::ContractError;
 use crate::model::{
     BadDebtLossAllocation, BorrowerPositionResponseV1, CollateralAssetV1, Denom,
-    DirectedSaleOfferV1, LiquidationAccess, RateParamsV1,
+    DirectedFillQuoteResponseV1, DirectedSaleOfferV1, LiquidationAccess, RateParamsV1,
     DEFAULT_MAX_LIQUIDATION_STALENESS_SECONDS,
 };
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RepoTokenConfig};
@@ -190,6 +191,31 @@ fn seize(amount: u128) -> BTreeMap<String, Uint128> {
     m
 }
 
+fn two_asset_amounts(amount: u128) -> BTreeMap<String, Uint128> {
+    let mut amounts = seize(amount);
+    amounts.insert(UNRELIABLE_COLLATERAL.to_string(), Uint128::new(amount));
+    amounts
+}
+
+/// Healthy borrower holding 1000 `nbtc` at $1 and 400 `neth` at $1.50.
+fn setup_two_asset_borrower() -> (Deps, Env) {
+    let (mut deps, env) = setup_healthy_borrower();
+    let mut prices = prices_with_collateral("1.0");
+    prices.insert(UNRELIABLE_COLLATERAL.to_string(), price_entry("1.5"));
+    set_oracle_prices(&mut deps.querier, prices);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(
+            &Addr::unchecked(BORROWER),
+            &[coin(400, UNRELIABLE_COLLATERAL)],
+        ),
+        ExecuteMsg::AddCollateral {},
+    )
+    .expect("add second collateral");
+    (deps, env)
+}
+
 fn future(env: &Env) -> Timestamp {
     env.block.time.plus_seconds(3_600)
 }
@@ -280,8 +306,45 @@ fn liquidate(
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize,
+            min_collateral_out: None,
         },
     )
+}
+
+fn liquidate_fit(
+    deps: &mut Deps,
+    env: &Env,
+    repay: u128,
+    collateral_to_seize: BTreeMap<String, Uint128>,
+    min_collateral_out: BTreeMap<String, Uint128>,
+) -> Result<cosmwasm_std::Response, ContractError> {
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        message_info(&Addr::unchecked(OWNER), &[coin(repay, LENDING_DENOM)]),
+        ExecuteMsg::Liquidate {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize,
+            min_collateral_out: Some(min_collateral_out),
+        },
+    )
+}
+
+fn mins(pairs: &[(&str, u128)]) -> BTreeMap<String, Uint128> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), Uint128::new(*v)))
+        .collect()
+}
+
+fn bank_amounts(res: &cosmwasm_std::Response) -> Vec<Vec<cosmwasm_std::Coin>> {
+    res.messages
+        .iter()
+        .map(|msg| match &msg.msg {
+            CosmosMsg::Bank(BankMsg::Send { amount, .. }) => amount.clone(),
+            other => panic!("expected bank send, got {:?}", other),
+        })
+        .collect()
 }
 
 fn position(deps: &Deps, env: &Env) -> BorrowerPositionResponseV1 {
@@ -1071,6 +1134,7 @@ fn c4_expired_exact_seize_on_healthy_book_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize(455),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1094,6 +1158,7 @@ fn c5_expired_offer_does_not_block_classic_liquidation() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize(455),
+            min_collateral_out: None,
         },
     )
     .unwrap();
@@ -1567,5 +1632,269 @@ fn directed_fill_of_a_subset_applies_the_cap_to_what_remains() {
     assert_eq!(
         get_directed_sale_version(deps.as_ref().storage, BORROWER).unwrap(),
         1
+    );
+}
+
+#[test]
+fn fit_price_rise_seizes_306_clears_debt_and_refunds_nothing() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("2.0"));
+    // 612 units at $2 are worth $1224. Repay stays 600, cap is 612.
+    // floor(612 * 612 / 1224) = 306.
+    let res = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(612),
+        mins(&[(COLLATERAL_DENOM, 300)]),
+    )
+    .expect("price rise fit");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "true");
+    assert_eq!(attr(&res, ATTRIBUTE_AMOUNT), "600");
+    assert_eq!(bank_amounts(&res), vec![coins(306, COLLATERAL_DENOM)]);
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+    assert!(get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn fit_price_drop_repays_550_refunds_50_and_seizes_the_signed_amount() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("0.90"));
+    let res = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(612),
+        mins(&[(COLLATERAL_DENOM, 300)]),
+    )
+    .expect("price drop fit");
+    assert_eq!(attr(&res, ATTRIBUTE_AMOUNT), "550");
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        50
+    );
+    assert_eq!(
+        bank_amounts(&res),
+        vec![coins(612, COLLATERAL_DENOM), coins(50, LENDING_DENOM)]
+    );
+}
+
+#[test]
+fn fit_below_min_collateral_out_reverts_and_keeps_the_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("3"));
+    // floor(612 * 612 / 1836) = 204, below the floor of 250.
+    let err = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(612),
+        mins(&[(COLLATERAL_DENOM, 250)]),
+    )
+    .unwrap_err();
+    illegal_contains(err, "min_collateral_out");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(612)
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        600
+    );
+}
+
+#[test]
+fn fit_two_assets_share_one_ratio() {
+    let (mut deps, env) = setup_two_asset_borrower();
+    let offer = two_asset_amounts(400);
+    set_offer(&mut deps, &env, BORROWER, offer.clone(), future(&env)).unwrap();
+    // Values $400 and $600, cap $612. Both amounts are 400.
+    // floor(400 * 612 / 1000) = 244.
+    let res = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        offer,
+        mins(&[(COLLATERAL_DENOM, 200), (UNRELIABLE_COLLATERAL, 200)]),
+    )
+    .expect("shared ratio");
+    assert_eq!(
+        bank_amounts(&res),
+        vec![vec![
+            coin(244, COLLATERAL_DENOM),
+            coin(244, UNRELIABLE_COLLATERAL),
+        ]]
+    );
+}
+
+#[test]
+fn fit_one_asset_below_its_floor_reverts_the_whole_fill() {
+    let (mut deps, env) = setup_two_asset_borrower();
+    let offer = two_asset_amounts(400);
+    set_offer(&mut deps, &env, BORROWER, offer.clone(), future(&env)).unwrap();
+    let err = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        offer,
+        mins(&[(COLLATERAL_DENOM, 200), (UNRELIABLE_COLLATERAL, 245)]),
+    )
+    .unwrap_err();
+    illegal_contains(err, "min_collateral_out");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        two_asset_amounts(400)
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        600
+    );
+}
+
+#[test]
+fn fit_lowered_repayment_that_would_be_bad_debt_reverts() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(1000), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("0.5"));
+    let err = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(1000),
+        mins(&[(COLLATERAL_DENOM, 1000)]),
+    )
+    .unwrap_err();
+    illegal_contains(err, "bad debt");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(1000)
+    );
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        600
+    );
+    assert_eq!(
+        get_reserve_state_v1(deps.as_ref().storage)
+            .unwrap()
+            .deficit_underlying,
+        0
+    );
+}
+
+#[test]
+fn liquidate_without_min_collateral_out_rejects_an_oversized_seize() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("2.0"));
+    let err = liquidate(&mut deps, &env, OWNER, 600, seize(612)).unwrap_err();
+    illegal_contains(err, "exceeds allowed maximum");
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(612)
+    );
+}
+
+#[test]
+fn classic_liquidation_with_min_collateral_out_scales_on_a_price_rise() {
+    let (mut deps, env) = setup_borrower(600, "0.80");
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("0.83"));
+    // 765 is the bonus-cap seize at $0.80 (612 / 0.80). At $0.83 that basket
+    // is worth $634.95, so floor(765 * 612 / 634.95) = 737.
+    let res = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(765),
+        mins(&[(COLLATERAL_DENOM, 700)]),
+    )
+    .expect("classic fit");
+    assert_eq!(attr(&res, ATTRIBUTE_DIRECTED_SALE), "false");
+    assert_eq!(attr(&res, ATTRIBUTE_AMOUNT), "600");
+    assert_eq!(bank_amounts(&res), vec![coins(737, COLLATERAL_DENOM)]);
+    assert_eq!(
+        get_scaled_borrow(deps.as_ref().storage, BORROWER).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn quote_price_rise_returns_306_and_leaves_the_offer() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("2.0"));
+    let bin = query(
+        deps.as_ref(),
+        env.clone(),
+        QueryMsg::GetDirectedFillQuote {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize(612),
+            sent: Uint128::new(600),
+            min_collateral_out: Some(mins(&[(COLLATERAL_DENOM, 300)])),
+        },
+    )
+    .expect("quote");
+    let quoted: DirectedFillQuoteResponseV1 = from_json(bin).unwrap();
+    assert_eq!(quoted.collateral_to_seize, seize(306));
+    assert_eq!(quoted.actual_repay_underlying, Uint128::new(600));
+    assert_eq!(quoted.refund, Uint128::zero());
+    assert_eq!(quoted.debt_payoff, Uint128::new(600));
+    assert!(quoted.directed_fill);
+    assert_eq!(
+        position(&deps, &env).directed_sale_offer.unwrap().amounts,
+        seize(612)
+    );
+}
+
+#[test]
+fn quote_below_minimum_matches_the_liquidate_error() {
+    let (mut deps, env) = setup_healthy_borrower();
+    set_offer(&mut deps, &env, BORROWER, seize(612), future(&env)).unwrap();
+    set_oracle_prices(&mut deps.querier, prices_with_collateral("3"));
+    let quote_err = query(
+        deps.as_ref(),
+        env.clone(),
+        QueryMsg::GetDirectedFillQuote {
+            borrower: BORROWER.to_string(),
+            collateral_to_seize: seize(612),
+            sent: Uint128::new(600),
+            min_collateral_out: Some(mins(&[(COLLATERAL_DENOM, 250)])),
+        },
+    )
+    .unwrap_err();
+    let liquidate_err = liquidate_fit(
+        &mut deps,
+        &env,
+        600,
+        seize(612),
+        mins(&[(COLLATERAL_DENOM, 250)]),
+    )
+    .unwrap_err();
+    assert_eq!(quote_err.to_string(), liquidate_err.to_string());
+    assert_eq!(
+        get_directed_sale_offer(deps.as_ref().storage, BORROWER)
+            .unwrap()
+            .unwrap()
+            .amounts,
+        seize(612)
     );
 }

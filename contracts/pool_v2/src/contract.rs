@@ -14,7 +14,7 @@ use crate::model::{ContractStateV1, OperationalState};
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 use crate::query::{
     query_borrower_position, query_borrower_status, query_collateral_requirements,
-    query_lender_status, query_reserve, query_state,
+    query_directed_fill_quote, query_lender_status, query_reserve, query_state,
 };
 use crate::storage::contract_state::ITEM;
 use crate::storage::{get_contract_state_v1, set_contract_state_v1};
@@ -97,7 +97,15 @@ pub fn execute(
         ExecuteMsg::Liquidate {
             borrower,
             collateral_to_seize,
-        } => liquidate(deps, env, info, borrower, &collateral_to_seize),
+            min_collateral_out,
+        } => liquidate(
+            deps,
+            env,
+            info,
+            borrower,
+            &collateral_to_seize,
+            min_collateral_out.as_ref(),
+        ),
         ExecuteMsg::UpdateSupportedCollateral {
             to_update,
             to_remove,
@@ -174,6 +182,19 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> Result<Binary, QueryError> 
         QueryMsg::GetState {} => query_state(deps, env),
         QueryMsg::GetReserve {} => query_reserve(deps, env),
         QueryMsg::GetBorrowerPosition { address } => query_borrower_position(deps, env, &address),
+        QueryMsg::GetDirectedFillQuote {
+            borrower,
+            collateral_to_seize,
+            sent,
+            min_collateral_out,
+        } => query_directed_fill_quote(
+            deps,
+            env,
+            borrower,
+            &collateral_to_seize,
+            min_collateral_out.as_ref(),
+            sent,
+        ),
         QueryMsg::GetCollateralRequirements {
             borrower,
             new_loan_amount,

@@ -1147,6 +1147,7 @@ fn spreadsheet_events_liabilities_zero() {
         ExecuteMsg::Liquidate {
             borrower: USER_D.to_string(),
             collateral_to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("event 12: liquidation");
@@ -1511,6 +1512,7 @@ fn spreadsheet_events_liabilities_zero_flat_spread_model() {
         ExecuteMsg::Liquidate {
             borrower: USER_D.to_string(),
             collateral_to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("event 12: liquidation");

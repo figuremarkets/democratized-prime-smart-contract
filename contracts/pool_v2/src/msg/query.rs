@@ -1,11 +1,12 @@
 use crate::model::{
     query::{BorrowerStatusResponseV1, LenderStatusResponseV1},
-    BorrowerPositionResponseV1, CollateralRequirementsResponseV1, ReserveResponseV1,
-    StateResponseV1,
+    BorrowerPositionResponseV1, CollateralRequirementsResponseV1, DirectedFillQuoteResponseV1,
+    ReserveResponseV1, StateResponseV1,
 };
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 use cw_ownable::cw_ownable_query;
+use std::collections::BTreeMap;
 
 #[cw_ownable_query]
 #[cw_serde]
@@ -38,6 +39,19 @@ pub enum QueryMsg {
     /// Borrower status: whether this address is marked require-commit.
     #[returns(BorrowerStatusResponseV1)]
     GetBorrowerStatus { address: String },
+    /// Quote a `Liquidate` with no writes and no check of who may liquidate.
+    /// `sent` is the lending-denom amount that would be attached. `min_collateral_out` is the
+    /// same opt-in fit as `Liquidate`: present, `collateral_to_seize` is a maximum. A rejection
+    /// uses the same error string as `Liquidate`. Indexes are the effective reserve, accrued
+    /// in memory the way `GetBorrowerPosition` does.
+    #[returns(DirectedFillQuoteResponseV1)]
+    GetDirectedFillQuote {
+        borrower: String,
+        collateral_to_seize: BTreeMap<String, Uint128>,
+        sent: Uint128,
+        #[serde(default)]
+        min_collateral_out: Option<BTreeMap<String, Uint128>>,
+    },
     /// Lender status: whether this address must pass commit_funds when withdrawing (per-address require commit on exit).
     /// Underlying lent position comes from the repo_token_cw20 **Balance** query, not this contract.
     #[returns(LenderStatusResponseV1)]

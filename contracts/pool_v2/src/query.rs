@@ -1,6 +1,7 @@
 pub mod borrower_position;
 pub mod borrower_status;
 pub mod collateral_requirements;
+pub mod directed_fill_quote;
 pub mod lender_status;
 pub mod reserve;
 pub mod state;
@@ -8,6 +9,7 @@ pub mod state;
 pub use borrower_position::query_borrower_position;
 pub use borrower_status::query_borrower_status;
 pub use collateral_requirements::query_collateral_requirements;
+pub use directed_fill_quote::query_directed_fill_quote;
 pub use lender_status::query_lender_status;
 pub use reserve::query_reserve;
 pub use state::query_state;

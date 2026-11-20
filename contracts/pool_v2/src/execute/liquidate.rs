@@ -60,10 +60,21 @@
 //! clears the row. Otherwise a directed fill starts from the offer minus the seize, and
 //! every other successful call starts from the original offer; both are clamped to the
 //! collateral just saved and shrunk to the fresh-price payoff cap. An oversized seize
-//! fails the value band and reverts, so the stored offer is unchanged.
+//! with `min_collateral_out` omitted fails the value band and reverts, so the stored offer
+//! is unchanged. When that field is set, the signed amounts are a maximum and are fitted
+//! to the execution price before the band.
+//!
+//! **Execution-price fit:** `min_collateral_out` makes `collateral_to_seize` a maximum.
+//! Repayment is `min(sent, debt payoff, floor of the signed basket in lending denom)`.
+//! Each signed amount becomes `floor(amount × cap / basket USD)`, where `cap` is that
+//! repayment's USD times `liquidation_bonus_rate`. A zero result is dropped. A missing
+//! price or an overflow reverts the fill. Each final amount must be at least its minimum
+//! (a missing key is zero). If the repayment falls below `min(sent, debt payoff)` and the
+//! post-state would be bad debt, the fill reverts and no write-off is booked. The
+//! directed-fill flag stays the one decided from the signed map.
 //!
 //! **Flow (see numbered sections in `liquidate`):** auth → debt/collateral checks → prices →
-//! directed-fill match → liquidatable (unless directed) → lending price → sent funds and scaled repay → per-asset checks and dry-run
+//! directed-fill match → liquidatable (unless directed) → lending price → sent funds → fit when `min_collateral_out` is set → scaled repay → per-asset checks and dry-run
 //! post-seizure → `bad_debt` → owner gate (load-bearing unpriceable unless directed, or a write-off that would
 //! sweep unpriceable collateral) → solvent write-off guard (priced market value must be below
 //! the debt payoff) → value band (100% floor waived on `bad_debt`, or a full
@@ -83,7 +94,9 @@ use crate::constants::{
 use crate::execute::directed_sale_sync::{
     sync_directed_sale_after_debt_decrease, ListingAfterDebt,
 };
-use crate::model::directed_sale::{is_live, is_seize_within_offer, subtract_seize};
+use crate::model::directed_sale::{
+    is_live, is_seize_within_offer, scale_to_cap, subtract_seize, ScaleToCap,
+};
 use crate::model::error::{illegal_argument, illegal_state, not_found, ContractError};
 use crate::model::health::BorrowerHealthV1;
 use crate::model::BorrowerCollateralV1;
@@ -100,9 +113,11 @@ use crate::utils::{
     validate_single_coin_denom, LiquidationPrices, WithRates,
 };
 use cosmwasm_std::{
-    ensure, Addr, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, Response, Storage, Uint128,
+    ensure, Addr, Api, BankMsg, Coin, Decimal256, DepsMut, Env, MessageInfo, QuerierWrapper,
+    Response, Storage, Timestamp, Uint128,
 };
 use democratized_prime_lib::common::assert_owner;
+use democratized_prime_lib::price_oracle::model::{AssetPriceResponseV1, PriceMapResponse};
 use std::collections::{BTreeMap, HashSet};
 
 pub const ACTION: &str = "liquidate";
@@ -121,54 +136,100 @@ pub const ASSERT_OWNER_UNPRICEABLE_ERR: &str =
 /// zero-value remainder is booked as bad debt and every remaining unit is swept to the
 /// liquidator. A write-off requires pre-seizure priced collateral market value below the debt
 /// payoff; otherwise emptying the map requires the full payoff. An empty seize is allowed only
-/// when the borrower holds nothing priceable. See module doc for flow.
-pub fn liquidate(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    borrower: String,
-    collateral_to_seize: &BTreeMap<String, Uint128>,
-) -> Result<Response, ContractError> {
-    let contract = get_contract_state_v1(deps.storage)?;
+/// when the borrower holds nothing priceable. When `min_collateral_out` is set, the signed
+/// seize is a maximum and is fitted to the execution price before the value band. See module
+/// doc for flow.
 
-    // ---------- 1. Auth and borrower identity ----------
-    if matches!(
-        contract.liquidation_access,
-        LiquidationAccess::LiquidatorOnly
-    ) {
-        assert_liquidator(&contract, &info.sender, ASSERT_LIQUIDATOR_ERR)?;
-    }
-    let borrower_addr = deps.api.addr_validate(borrower.trim())?;
+#[derive(Clone, Copy)]
+pub(crate) struct LiquidationPreview<'a> {
+    pub storage: &'a dyn Storage,
+    pub querier: &'a QuerierWrapper<'a>,
+    pub block_time: Timestamp,
+    pub api: &'a dyn Api,
+    pub contract: &'a ContractStateV1,
+    pub borrow_index: Decimal256,
+    pub borrower: &'a str,
+    pub signed_seize: &'a BTreeMap<String, Uint128>,
+    pub min_collateral_out: Option<&'a BTreeMap<String, Uint128>>,
+    /// Attached coins for `Liquidate`, or the numeric `sent` on the quote.
+    pub sent: PreviewSent<'a>,
+    /// Runs the permissionless owner gate when set. The quote leaves this empty.
+    pub owner_sender: Option<&'a Addr>,
+}
+
+/// Where the lending amount comes from. The coin check stays at the same point in
+/// the shared checks as `Liquidate` used before the quote existed.
+#[derive(Clone, Copy)]
+pub(crate) enum PreviewSent<'a> {
+    Attached(&'a MessageInfo),
+    Amount(u128),
+}
+
+pub(crate) struct PreviewedLiquidation {
+    pub borrower_key: String,
+    pub debt_payoff: u128,
+    pub sent_u128: u128,
+    pub actual_repay_underlying: u128,
+    pub scaled_repay: u128,
+    pub new_scaled_debt: u128,
+    pub collateral_to_seize: BTreeMap<String, Uint128>,
+    pub seized_value_usd: Decimal256,
+    pub min_collateral_value_required: Decimal256,
+    pub max_collateral_value_allowed: Decimal256,
+    pub directed_fill: bool,
+    pub bad_debt: bool,
+    pub bad_debt_underlying_amt: u128,
+    pub to_seize: Vec<(String, u128)>,
+    pub post_collateral: BorrowerCollateralV1,
+    pub stored_offer: Option<crate::model::directed_sale::DirectedSaleOfferV1>,
+}
+
+/// Pre-write liquidation checks shared by `Liquidate` and `GetDirectedFillQuote`.
+///
+/// `owner_sender` runs the permissionless owner gate. The quote passes `None`.
+/// `LiquidationAccess` is not checked here.
+pub(crate) fn preview_liquidation(
+    input: &LiquidationPreview,
+) -> Result<PreviewedLiquidation, ContractError> {
+    let LiquidationPreview {
+        storage,
+        querier,
+        block_time,
+        api,
+        contract,
+        borrow_index,
+        borrower,
+        signed_seize: collateral_to_seize,
+        min_collateral_out,
+        sent,
+        owner_sender,
+    } = *input;
+    let borrower_addr = api.addr_validate(borrower.trim())?;
     let borrower_key = borrower_addr.as_str();
 
     // ---------- 2. Borrower must have debt and collateral ----------
-    let mut reserve = update_reserve_indexes(deps.storage, &env, &contract.rate_params)?;
-    let scaled_debt = get_scaled_borrow(deps.storage, borrower_key)?;
+    let scaled_debt = get_scaled_borrow(storage, borrower_key)?;
     ensure!(
         scaled_debt > 0,
         illegal_argument(
             "Borrower has no debt (no scaled borrow on file; may have repaid in full)",
         )
     );
-    let debt_underlying = scaled_to_underlying_borrow(scaled_debt, reserve.borrow_index)?;
-    let debt_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, reserve.borrow_index)?;
+    let debt_underlying = scaled_to_underlying_borrow(scaled_debt, borrow_index)?;
+    let debt_payoff = scaled_to_underlying_borrow_ceil(scaled_debt, borrow_index)?;
     ensure!(
         debt_underlying > 0,
         illegal_argument("Borrower has no debt (scaled borrow rounds to zero underlying; dust)",)
     );
-    let borrower_collateral = get_borrower_collateral(deps.storage, borrower_key)?;
+    let borrower_collateral = get_borrower_collateral(storage, borrower_key)?;
     ensure!(
         !borrower_collateral.amounts.is_empty(),
         illegal_argument("Borrower has no collateral")
     );
 
     // ---------- 3. Must be liquidatable (LTV >= liquidation_rate) ----------
-    let quoted = get_asset_prices_for_liquidation(
-        &deps.querier,
-        &env.block.time,
-        &contract,
-        &borrower_collateral,
-    )?;
+    let quoted =
+        get_asset_prices_for_liquidation(querier, &block_time, contract, &borrower_collateral)?;
     let asset_prices = &quoted.prices;
     // Nothing priceable: an empty seize is the owner write-off. A non-zero entry still
     // hits the seize ban below. A priced holding with an empty seize is still rejected.
@@ -177,15 +238,15 @@ pub fn liquidate(
         .iter()
         .any(|(id, amt)| *amt > 0 && !quoted.unpriceable.contains(id));
     let (health, _ltv) = get_borrower_health(
-        &contract,
+        contract,
         &contract.supported_collateral_assets,
         asset_prices,
         &borrower_collateral,
         Uint128::from(debt_underlying),
     )?;
-    let stored_offer = get_directed_sale_offer(deps.storage, borrower_key)?;
+    let stored_offer = get_directed_sale_offer(storage, borrower_key)?;
     let directed_fill = stored_offer.as_ref().is_some_and(|offer| {
-        is_live(offer, env.block.time) && is_seize_within_offer(&offer.amounts, collateral_to_seize)
+        is_live(offer, block_time) && is_seize_within_offer(&offer.amounts, collateral_to_seize)
     });
     if !directed_fill {
         ensure!(
@@ -209,16 +270,44 @@ pub fn liquidate(
     );
     let bonus = contract.liquidation_bonus_rate;
 
-    // ---------- 5. Attached lending funds; actual repay and scaled repay ----------
+    // ---------- 5. Attached lending funds; fit; actual repay and scaled repay ----------
     // Only a non-zero amount is required; how much is *enough* is decided by post-state health.
-    let sent = validate_single_coin_denom(&info, &contract.lending_denom, Uint128::one())?;
-    let sent_u128 = sent.u128();
+    // The coin check stays here, after the liquidatable gate, so an earlier rejection
+    // still wins when the attached funds are also wrong.
+    let sent_u128 = match sent {
+        PreviewSent::Attached(info) => {
+            validate_single_coin_denom(info, &contract.lending_denom, Uint128::one())?.u128()
+        }
+        PreviewSent::Amount(amount) => amount,
+    };
     // LTV/health use floor debt; cancelling all scaled units requires and collects ceil(s · bi).
-    let actual_repay_underlying = sent_u128.min(debt_payoff);
+    // The directed-fill flag above used the signed map. The fit may shrink both the seize
+    // and the repayment; it does not recompute that flag.
+    let repay_before_fit = sent_u128.min(debt_payoff);
+    let fitted_seize = match min_collateral_out {
+        Some(min_out) => Some(fit_seize_to_execution_price(
+            collateral_to_seize,
+            min_out,
+            asset_prices,
+            price_lending,
+            repay_before_fit,
+            bonus,
+        )?),
+        None => None,
+    };
+    let actual_repay_underlying = fitted_seize
+        .as_ref()
+        .map(|(_, repay)| *repay)
+        .unwrap_or(repay_before_fit);
+    let repayment_lowered = actual_repay_underlying < repay_before_fit;
+    let collateral_to_seize = match &fitted_seize {
+        Some((amounts, _)) => amounts,
+        None => collateral_to_seize,
+    };
     let scaled_repay = if actual_repay_underlying >= debt_payoff {
         scaled_debt
     } else {
-        underlying_to_scaled_borrow(actual_repay_underlying, reserve.borrow_index)?
+        underlying_to_scaled_borrow(actual_repay_underlying, borrow_index)?
     };
     ensure!(
         scaled_repay > 0,
@@ -325,17 +414,25 @@ pub fn liquidate(
     // One definition, used by the owner gate, the floor waiver, the ceiled-payoff guard,
     // the health exemption, and persistence. A full repay is not a write-off.
     let bad_debt = new_scaled_debt > 0 && post_collateral_value_usd.is_zero();
-    require_owner_for_unpriceable(
-        deps.storage,
-        &info.sender,
-        &contract,
-        &quoted,
-        &borrower_collateral,
-        debt_underlying,
-        bad_debt,
-        &post_collateral,
-        directed_fill,
-    )?;
+    // A price fit that collects less than min(sent, debt payoff) must not open a write-off.
+    // The unreduced repayment still takes the existing bad-debt path.
+    ensure!(
+        !(repayment_lowered && bad_debt),
+        illegal_argument("Fitting the repayment to the execution price would book bad debt",)
+    );
+    if let Some(sender) = owner_sender {
+        require_owner_for_unpriceable(
+            storage,
+            sender,
+            contract,
+            &quoted,
+            &borrower_collateral,
+            debt_underlying,
+            bad_debt,
+            &post_collateral,
+            directed_fill,
+        )?;
+    }
 
     // Priced collateral is summed at market (`value_usd`, no haircut), the same measure as the
     // seizure band. Unpriceable holdings and ids missing from `asset_prices` count as $0, so an
@@ -407,10 +504,9 @@ pub fn liquidate(
     );
 
     if new_scaled_debt > 0 && !bad_debt {
-        let post_debt_underlying =
-            scaled_to_underlying_borrow(new_scaled_debt, reserve.borrow_index)?;
+        let post_debt_underlying = scaled_to_underlying_borrow(new_scaled_debt, borrow_index)?;
         let (post_health, post_ltv) = get_borrower_health(
-            &contract,
+            contract,
             &contract.supported_collateral_assets,
             asset_prices,
             &post_collateral,
@@ -433,10 +529,76 @@ pub fn liquidate(
         // Cover the aggregate floor drop from cancelling `new_scaled_debt`. `floor(s' · bi)` can
         // be 1 short of `floor(T · bi) − floor((T − s') · bi)`; ceil is at most 1 over exact and
         // keeps implied cash conservative. Immediate haircut still requires the amount `< L`.
-        scaled_to_underlying_borrow_ceil(new_scaled_debt, reserve.borrow_index)?
+        scaled_to_underlying_borrow_ceil(new_scaled_debt, borrow_index)?
     } else {
         0u128
     };
+
+    Ok(PreviewedLiquidation {
+        borrower_key: borrower_key.to_string(),
+        debt_payoff,
+        sent_u128,
+        actual_repay_underlying,
+        scaled_repay,
+        new_scaled_debt,
+        collateral_to_seize: collateral_to_seize.clone(),
+        seized_value_usd,
+        min_collateral_value_required,
+        max_collateral_value_allowed,
+        directed_fill,
+        bad_debt,
+        bad_debt_underlying_amt,
+        to_seize,
+        post_collateral,
+        stored_offer,
+    })
+}
+
+pub fn liquidate(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    borrower: String,
+    collateral_to_seize: &BTreeMap<String, Uint128>,
+    min_collateral_out: Option<&BTreeMap<String, Uint128>>,
+) -> Result<Response, ContractError> {
+    let contract = get_contract_state_v1(deps.storage)?;
+
+    // ---------- 1. Auth and borrower identity ----------
+    if matches!(
+        contract.liquidation_access,
+        LiquidationAccess::LiquidatorOnly
+    ) {
+        assert_liquidator(&contract, &info.sender, ASSERT_LIQUIDATOR_ERR)?;
+    }
+    let borrower_addr = deps.api.addr_validate(borrower.trim())?;
+    let mut reserve = update_reserve_indexes(deps.storage, &env, &contract.rate_params)?;
+    let plan = preview_liquidation(&LiquidationPreview {
+        storage: deps.storage,
+        querier: &deps.querier,
+        block_time: env.block.time,
+        api: deps.api,
+        contract: &contract,
+        borrow_index: reserve.borrow_index,
+        borrower: borrower_addr.as_str(),
+        signed_seize: collateral_to_seize,
+        min_collateral_out,
+        sent: PreviewSent::Attached(&info),
+        owner_sender: Some(&info.sender),
+    })?;
+    let borrower_key_owned = plan.borrower_key;
+    let borrower_key = borrower_key_owned.as_str();
+    let sent_u128 = plan.sent_u128;
+    let actual_repay_underlying = plan.actual_repay_underlying;
+    let scaled_repay = plan.scaled_repay;
+    let new_scaled_debt = plan.new_scaled_debt;
+    let collateral_to_seize = plan.collateral_to_seize;
+    let directed_fill = plan.directed_fill;
+    let bad_debt = plan.bad_debt;
+    let bad_debt_underlying_amt = plan.bad_debt_underlying_amt;
+    let to_seize = plan.to_seize;
+    let post_collateral = plan.post_collateral;
+    let stored_offer = plan.stored_offer;
 
     // ---------- 8. Persist reserve aggregates, borrower scaled debt, protocol collateral totals, borrower map ----------
     if bad_debt {
@@ -500,7 +662,7 @@ pub fn liquidate(
     // the listing that survived that check, against the collateral and debt just saved.
     if let Some(offer) = stored_offer {
         let basis = if directed_fill {
-            subtract_seize(&offer.amounts, collateral_to_seize)
+            subtract_seize(&offer.amounts, &collateral_to_seize)
         } else {
             offer.amounts
         };
@@ -659,6 +821,63 @@ fn require_owner_for_unpriceable(
         assert_owner(storage, sender, ASSERT_OWNER_UNPRICEABLE_ERR)?;
     }
     Ok(())
+}
+
+/// Scale `signed` so it is worth at most `repay_before_fit` times the bonus, and cap the
+/// repayment by the basket's floored lending-denom value. `min_out` cancels the fill when
+/// any final amount is short; it is not the amount seized.
+fn fit_seize_to_execution_price(
+    signed: &BTreeMap<String, Uint128>,
+    min_out: &BTreeMap<String, Uint128>,
+    prices: &PriceMapResponse,
+    lending_price: &AssetPriceResponseV1,
+    repay_before_fit: u128,
+    bonus: Decimal256,
+) -> Result<(BTreeMap<String, Uint128>, u128), ContractError> {
+    let mut amount_value_usd = BTreeMap::new();
+    let mut basket_usd = Decimal256::zero();
+    for (asset_id, amount) in signed {
+        if amount.is_zero() {
+            continue;
+        }
+        let Some(price) = prices.get(asset_id) else {
+            return Err(fit_unchanged());
+        };
+        let Ok(value) = price.value_usd(amount.u128()) else {
+            return Err(fit_unchanged());
+        };
+        let Ok(sum) = basket_usd.checked_add(value) else {
+            return Err(fit_unchanged());
+        };
+        basket_usd = sum;
+        amount_value_usd.insert(asset_id.clone(), value);
+    }
+    let Ok(basket_lending) = lending_price.amount_from_usd_floor(basket_usd) else {
+        return Err(fit_unchanged());
+    };
+    let actual_repay = repay_before_fit.min(basket_lending);
+    let Ok(repay_usd) = lending_price.value_usd(actual_repay) else {
+        return Err(fit_unchanged());
+    };
+    let Ok(cap_usd) = repay_usd.checked_mul(bonus) else {
+        return Err(fit_unchanged());
+    };
+    let scaled = match scale_to_cap(signed, &amount_value_usd, cap_usd) {
+        ScaleToCap::Unchanged => return Err(fit_unchanged()),
+        ScaleToCap::Scaled(amounts) => amounts,
+    };
+    for (asset_id, min_amt) in min_out {
+        let got = scaled.get(asset_id).copied().unwrap_or_else(Uint128::zero);
+        ensure!(
+            got >= *min_amt,
+            illegal_argument(format!("Seized {asset_id} is below min_collateral_out"))
+        );
+    }
+    Ok((scaled, actual_repay))
+}
+
+fn fit_unchanged() -> ContractError {
+    illegal_argument("Signed collateral could not be fitted to the execution price")
 }
 
 fn add_outgoing_amount(

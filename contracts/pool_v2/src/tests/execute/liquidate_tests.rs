@@ -336,6 +336,7 @@ fn liquidate_rejects_amount_that_does_not_reduce_scaled_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -372,6 +373,7 @@ fn liquidate_non_owner_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -397,6 +399,7 @@ fn liquidate_for_custodian_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -422,6 +425,7 @@ fn liquidate_restricted_configured_liquidator_succeeds_owner_and_unrelated_fail(
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("configured liquidator may liquidate when access is restricted");
@@ -435,6 +439,7 @@ fn liquidate_restricted_configured_liquidator_succeeds_owner_and_unrelated_fail(
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -450,6 +455,7 @@ fn liquidate_restricted_configured_liquidator_succeeds_owner_and_unrelated_fail(
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -511,6 +517,7 @@ fn liquidate_permissionless_allows_non_owner() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("any sender may liquidate when access is permissionless");
@@ -560,6 +567,7 @@ fn liquidate_permissionless_still_allows_owner() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("owner may still liquidate when access is permissionless");
@@ -579,6 +587,7 @@ fn liquidate_permissionless_rejects_non_owner_when_unpriceable_has_no_stored_quo
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -609,6 +618,7 @@ fn liquidate_permissionless_rejects_non_owner_when_unpriceable_quote_is_zero() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -633,6 +643,7 @@ fn liquidate_permissionless_allows_non_owner_when_unpriceable_dust_is_not_load_b
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("dust of a too-old feed does not disable permissionless");
@@ -653,6 +664,7 @@ fn liquidate_permissionless_rejects_non_owner_when_unpriceable_collateral_is_loa
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -677,6 +689,7 @@ fn liquidate_permissionless_owner_still_liquidates_when_collateral_unpriceable()
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("owner may still liquidate a mixed unpriceable bag under permissionless");
@@ -696,6 +709,7 @@ fn liquidate_permissionless_allows_non_owner_when_stale_within_last_known() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("last-known within the bound is still permissionless");
@@ -723,6 +737,7 @@ fn liquidate_succeeds_when_lending_denom_price_is_stale() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed using last-known lending denom price");
@@ -819,6 +834,7 @@ fn liquidate_succeeds_when_one_collateral_price_is_stale() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed with one stale collateral feed");
@@ -850,6 +866,7 @@ fn liquidate_succeeds_when_one_collateral_price_is_missing() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_success(),
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed with one missing collateral feed");
@@ -886,6 +903,7 @@ fn liquidate_fails_when_seizing_unpriceable_collateral() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -926,6 +944,7 @@ fn liquidate_fails_when_seizing_zero_price_collateral() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -959,6 +978,7 @@ fn liquidate_succeeds_when_seizing_stale_collateral() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed seizing stale-priced collateral at last-known");
@@ -999,6 +1019,7 @@ fn liquidate_fails_when_seizing_collateral_beyond_staleness_bound() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1028,6 +1049,7 @@ fn liquidate_fails_when_all_collateral_has_no_stored_price() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(UNRELIABLE_COLLATERAL, 1000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1071,6 +1093,7 @@ fn liquidate_borrower_with_no_debt_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1129,6 +1152,7 @@ fn liquidate_healthy_borrower_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1159,6 +1183,7 @@ fn liquidate_repay_too_small_to_restore_health_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1206,6 +1231,7 @@ fn liquidate_to_margin_rate_succeeds_without_over_liquidating() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("liquidating to exactly margin_rate must be allowed");
@@ -1276,6 +1302,7 @@ fn liquidate_succeeds_and_sends_collateral_to_liquidator() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed");
@@ -1357,6 +1384,7 @@ fn liquidate_full_debt_after_interest_accrual_clears_scaled_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed");
@@ -1409,6 +1437,7 @@ fn liquidate_full_close_rejects_floored_payoff_rounding_residue() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1519,6 +1548,7 @@ fn liquidate_zero_value_remainder_rejects_floored_payoff_rounding_residue() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 2000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1627,6 +1657,7 @@ fn liquidate_zero_value_remainder_ceiled_payoff_clears_scaled_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 2000),
+            min_collateral_out: None,
         },
     )
     .expect("ceiled payoff should close against a $0 remainder");
@@ -1682,6 +1713,7 @@ fn liquidate_excess_repay_refunded() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: to_seize,
+            min_collateral_out: None,
         },
     )
     .expect("liquidate should succeed");
@@ -1754,6 +1786,7 @@ fn liquidate_insufficient_collateral_value_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: too_little,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1787,6 +1820,7 @@ fn liquidate_excess_collateral_value_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: too_much,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1816,6 +1850,7 @@ fn liquidate_empty_collateral_to_seize_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: empty,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1843,6 +1878,7 @@ fn liquidate_no_funds_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1866,6 +1902,7 @@ fn liquidate_repay_amount_zero_fails() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: collateral_to_seize_min(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -1945,6 +1982,7 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: all_collateral,
+            min_collateral_out: None,
         },
     )
     .expect("liquidate underwater");
@@ -1985,6 +2023,7 @@ fn liquidate_bad_debt_books_deficit_and_clears_scaled_borrow() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: dummy_seize,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -2076,6 +2115,7 @@ fn liquidate_bad_debt_writeoff_uses_ceiled_residual() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("underwater liquidate after accrual");
@@ -2170,6 +2210,7 @@ fn liquidate_zero_value_remainder_books_bad_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("priced-side close with unpriceable leftover books bad debt");
@@ -2302,6 +2343,7 @@ fn liquidate_worthless_priceable_remainder_books_bad_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount - 1),
+            min_collateral_out: None,
         },
     )
     .expect("worthless priceable remainder should liquidate and write off");
@@ -2435,6 +2477,7 @@ fn liquidate_full_repay_with_unpriceable_remainder_does_not_book_bad_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full repay with unpriceable leftover");
@@ -2540,6 +2583,7 @@ fn liquidate_bad_debt_immediate_haircut_skips_deficit() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: all_collateral,
+            min_collateral_out: None,
         },
     )
     .expect("liquidate underwater immediate haircut");
@@ -2583,6 +2627,7 @@ fn liquidate_full_close_priced_dust_books_deficit() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full close of priced dust");
@@ -2636,6 +2681,7 @@ fn liquidate_full_close_priced_dust_immediate_haircut() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full close of priced dust with immediate haircut");
@@ -2696,6 +2742,7 @@ fn liquidate_full_close_valuable_bag_rejected_by_bonus_cap() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, collateral_amount),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -2729,6 +2776,7 @@ fn liquidate_partial_seizure_still_requires_100_percent_floor() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -2805,6 +2853,7 @@ fn liquidate_full_close_with_full_debt_repayment_books_no_deficit() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full close with full debt repayment");
@@ -2892,6 +2941,7 @@ fn liquidate_full_close_18_decimal_cheap_display_rejected_by_bonus_cap() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -3037,6 +3087,7 @@ fn liquidate_owner_resolves_all_unpriceable_missing_feed() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
+            min_collateral_out: None,
         },
     )
     .expect("liquidator empty seize writes off an all-unpriceable position");
@@ -3056,6 +3107,7 @@ fn liquidate_owner_resolves_all_unpriceable_expired_last_known() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
+            min_collateral_out: None,
         },
     )
     .expect("liquidator empty seize writes off an expired-only position");
@@ -3080,6 +3132,7 @@ fn liquidate_owner_full_repay_all_unpriceable_sends_no_collateral() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
+            min_collateral_out: None,
         },
     )
     .expect("liquidator full repay of an all-unpriceable position");
@@ -3131,6 +3184,7 @@ fn liquidate_permissionless_rejects_non_owner_all_unpriceable() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: BTreeMap::new(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -3257,6 +3311,7 @@ fn liquidate_permissionless_non_owner_cannot_write_off_unpriceable_remainder() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: bug_example_seize(),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -3300,6 +3355,7 @@ fn liquidate_owner_writeoff_sweeps_unpriceable_remainder() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: bug_example_seize(),
+            min_collateral_out: None,
         },
     )
     .expect("owner write-off sweeps both assets");
@@ -3466,6 +3522,7 @@ fn liquidate_zero_quote_remainder_is_swept() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("zero-quote remainder is swept with the write-off");
@@ -3560,6 +3617,7 @@ fn liquidate_permissionless_non_owner_sweeps_priced_worthless_dust() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(WEI_COLLATERAL, wei_amount - 1),
+            min_collateral_out: None,
         },
     )
     .expect("non-owner sweeps priced worthless dust");
@@ -3686,6 +3744,7 @@ fn liquidate_rejects_writeoff_when_priced_collateral_covers_payoff() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -3732,6 +3791,7 @@ fn assert_covered_partial_stays_healthy(
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, seize),
+            min_collateral_out: None,
         },
     )
     .unwrap_or_else(|err| {
@@ -3811,6 +3871,7 @@ fn liquidate_permissionless_non_owner_rejects_writeoff_when_priced_collateral_co
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -3843,6 +3904,7 @@ fn liquidate_full_payoff_closes_when_priced_collateral_covers_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full payoff closes a covered position");
@@ -3887,6 +3949,7 @@ fn liquidate_insolvent_priced_collateral_still_books_bad_debt() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("insolvent priced bag still writes off");
@@ -3922,6 +3985,7 @@ fn liquidate_rejects_short_repay_when_priced_market_equals_payoff() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -3944,6 +4008,7 @@ fn liquidate_rejects_short_repay_when_priced_market_equals_payoff() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full payoff is the close when market value equals the payoff");
@@ -4027,6 +4092,7 @@ fn liquidate_covered_priced_side_keeps_unpriceable_remainder() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
@@ -4057,6 +4123,7 @@ fn liquidate_covered_priced_side_keeps_unpriceable_remainder() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_all(COLLATERAL_DENOM, 1000),
+            min_collateral_out: None,
         },
     )
     .expect("full payoff leaves the unpriceable unit");
@@ -4148,6 +4215,7 @@ fn liquidate_sums_priced_market_value_across_assets() {
         ExecuteMsg::Liquidate {
             borrower: BORROWER.to_string(),
             collateral_to_seize: seize_both,
+            min_collateral_out: None,
         },
     )
     .unwrap_err();
